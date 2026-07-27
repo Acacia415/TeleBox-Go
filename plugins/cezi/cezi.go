@@ -8,19 +8,25 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"unicode"
 
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
+	"github.com/Acacia415/TeleBox-Go/internal/legacyconfig"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
+	"github.com/Acacia415/TeleBox-Go/internal/storage"
 )
 
 const (
-	defaultModel = "llama-3.3-70b-versatile"
-	apiKeyName   = "api_key"
-	modelName    = "model"
+	defaultModel    = "llama-3.3-70b-versatile"
+	defaultGroqBase = "https://api.groq.com/openai"
+	apiKeyName      = "api_key"
+	modelName       = "model"
+	baseURLName     = "base_url"
 )
 
 const fortunePrompt = `汝乃“玄机子”，精测字、通易数、善拆解。回答须以文言为主，古雅玄妙，
@@ -41,20 +47,16 @@ var excludedChars = makeSet(
 
 type Plugin struct {
 	services service.Container
-	endpoint string
 }
 
 func New(services service.Container) *Plugin {
-	return &Plugin{
-		services: services,
-		endpoint: "https://api.groq.com/openai/v1/chat/completions",
-	}
+	return &Plugin{services: services}
 }
 
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "cezi",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "使用 Groq 生产模型进行测字解签",
 	}
 }
@@ -63,12 +65,21 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "cezi",
 		Description: "输入汉字或从回复消息随机抽字测字",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"cezi <汉字>",
+			"cezi（回复消息，随机抽字）",
+			"cezi apikey <Groq API Key>|clear",
+			"cezi model <模型名>",
+			"cezi baseurl <地址|clear>",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 
-func (p *Plugin) Start(context.Context) error { return nil }
+func (p *Plugin) Start(ctx context.Context) error {
+	return p.migrateLegacyConfig(ctx)
+}
 
 func (p *Plugin) Stop(context.Context) error { return nil }
 
@@ -81,6 +92,8 @@ func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 			return p.configureAPIKey(ctx, request)
 		case "model":
 			return p.configureModel(ctx, request)
+		case "baseurl":
+			return p.configureBaseURL(ctx, request)
 		}
 	}
 
@@ -160,6 +173,33 @@ func (p *Plugin) configureModel(ctx context.Context, request command.Request) er
 	return p.respond(ctx, request, "✅ 模型已设置："+model)
 }
 
+func (p *Plugin) configureBaseURL(ctx context.Context, request command.Request) error {
+	if len(request.Args) == 1 {
+		value, _ := p.readConfig(ctx, baseURLName)
+		if value == "" {
+			value = defaultGroqBase
+		}
+		return p.respond(ctx, request, "🌐 当前 Groq Base URL："+value)
+	}
+	value := strings.TrimRight(strings.TrimSpace(request.Args[1]), "/")
+	if strings.EqualFold(value, "clear") {
+		if err := p.services.Storage.Delete(ctx, "cezi", baseURLName); err != nil &&
+			!errors.Is(err, storage.ErrNotFound) {
+			return p.respond(ctx, request, "❌ 恢复默认地址失败："+err.Error())
+		}
+		return p.respond(ctx, request, "✅ 已恢复 Groq 默认地址")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" {
+		return p.respond(ctx, request, "❌ Base URL 必须是有效的 HTTP(S) 地址")
+	}
+	if err := p.writeConfig(ctx, baseURLName, value); err != nil {
+		return p.respond(ctx, request, "❌ 保存 Base URL 失败："+err.Error())
+	}
+	return p.respond(ctx, request, "✅ Groq Base URL 已保存")
+}
+
 func (p *Plugin) selectCharacter(
 	ctx context.Context,
 	request command.Request,
@@ -197,6 +237,11 @@ func (p *Plugin) callGroq(ctx context.Context, character string) (string, error)
 	if model == "" {
 		model = defaultModel
 	}
+	baseURL, _ := p.readConfig(ctx, baseURLName)
+	baseURL = strings.TrimRight(baseURL, "/")
+	if baseURL == "" {
+		baseURL = defaultGroqBase
+	}
 	body, err := json.Marshal(map[string]any{
 		"model": model,
 		"messages": []map[string]string{
@@ -211,7 +256,7 @@ func (p *Plugin) callGroq(ctx context.Context, character string) (string, error)
 	}
 	response, err := p.services.HTTP.Do(ctx, httpclient.Request{
 		Method: http.MethodPost,
-		URL:    p.endpoint,
+		URL:    baseURL + "/v1/chat/completions",
 		Headers: http.Header{
 			"Authorization": []string{"Bearer " + apiKey},
 			"Content-Type":  []string{"application/json"},
@@ -256,6 +301,43 @@ func (p *Plugin) readConfig(ctx context.Context, key string) (string, error) {
 
 func (p *Plugin) writeConfig(ctx context.Context, key, value string) error {
 	return p.services.Storage.Put(ctx, "cezi", key, []byte(value))
+}
+
+func (p *Plugin) migrateLegacyConfig(ctx context.Context) error {
+	if p.services.AssetsDir == "" {
+		return nil
+	}
+	values, err := legacyconfig.ReadSQLiteConfig(
+		filepath.Join(p.services.AssetsDir, "cezi_config.db"),
+	)
+	if err != nil {
+		return err
+	}
+	mapping := map[string]string{
+		"cezi_api_key":  apiKeyName,
+		"cezi_model":    modelName,
+		"cezi_base_url": baseURLName,
+	}
+	imported := 0
+	for oldKey, newKey := range mapping {
+		value := strings.TrimSpace(values[oldKey])
+		if value == "" {
+			continue
+		}
+		if _, err := p.services.Storage.Get(ctx, "cezi", newKey); err == nil {
+			continue
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
+		if err := p.writeConfig(ctx, newKey, value); err != nil {
+			return err
+		}
+		imported++
+	}
+	if imported > 0 {
+		p.services.Logger.Info("migrated legacy cezi config", "keys", imported)
+	}
+	return nil
 }
 
 func (p *Plugin) respond(ctx context.Context, request command.Request, text string) error {
@@ -333,5 +415,6 @@ func helpText(prefix string) string {
 		"回复一条消息后使用 " + prefix + "cezi，可随机抽取有意义汉字\n\n配置：\n" +
 		prefix + "cezi apikey <Groq API Key>\n" +
 		prefix + "cezi apikey clear\n" +
-		prefix + "cezi model <模型名>\n\n默认模型：" + defaultModel
+		prefix + "cezi model <模型名>\n" +
+		prefix + "cezi baseurl <地址|clear>\n\n默认模型：" + defaultModel
 }

@@ -1,7 +1,6 @@
 # Go 重构计划
 
-范围以全量备份 `telebox/plugins/*.ts` 中实际存在的 27 个插件为准，不把
-旧插件仓库中未安装的插件加入重构范围。
+范围以当前确认保留的 25 个业务插件为准，不把其他插件加入重构范围。
 
 ## 第一阶段：整体框架
 
@@ -32,14 +31,16 @@
 - [x] `ip`
 - [x] `isalive`
 - [x] `jointime`
-- [x] `music_bot`
 - [x] `nsticker`
 - [x] `rate`
 - [x] `re`
 - [x] `search`
 - [x] `speedlink`
-- [x] `speedtest`
 - [x] `telegram-backup`
+- [x] `trace`
+- [x] `yt-dlp`
+- [x] `yvlu`
+- [x] `zhijiao`
 
 ## 第三阶段：插件模块化与 Linux 发布
 
@@ -51,11 +52,9 @@
 - [x] monorepo 插件 SDK 与跨平台目录生成
 - [x] Linux amd64/arm64 一键安装脚本
 - [x] Telegram 内检查/更新框架、SHA-256 校验和自动重启
+- [x] 原版 alias/sudo/sure、调试、备份恢复和运行管理命令兼容
+- [x] 多插件安装/卸载、全部更新、本地包安装和插件包导出
 - [ ] Linux 隔离账号逐插件端到端验收
-- [x] `trace`
-- [x] `yt-dlp`
-- [x] `yvlu`
-- [x] `zhijiao`
 
 每个插件按以下验收条件推进：
 
@@ -63,7 +62,8 @@
 2. 核对外部上游是否仍维护，优先使用官方 HTTPS/API。
 3. 接入统一权限、并发、HTTP、存储、媒体或外部程序边界。
 4. 为解析、格式化和关键错误路径补测试。
-5. 通过 `go fmt ./...`、`go vet ./...`、`go test ./...` 和双二进制构建。
+5. 通过 `gofmt`、`go vet ./...`、`go test ./...`、Linux amd64/arm64
+   主程序及 25 个插件包构建。
 
 ## 第三阶段：兼容与部署
 
@@ -71,8 +71,9 @@
   - [x] AI 旧 `ai_config.db` 配置与历史
   - [x] SpeedLink 旧数据库、密钥与凭据
   - [x] Telegram Backup 旧 SQLite 和导出 ZIP/JSON
-  - [ ] 其余插件的历史业务数据逐项验收
+  - [x] alias/sudo/sure、yt-dlp、trace、eat/eatgif 等已安装资产兼容导入
+  - [ ] 其余没有持久业务数据的插件进行 Linux 实机行为验收
 - [x] 使用备份做一次不输出密钥的真实 dry-run
 - [ ] 在隔离账号进行 Telegram 端到端兼容测试
-- [ ] 编写 Windows/Linux 部署、升级和回滚说明
+- [x] 编写 Windows/Linux 部署、升级和回滚说明
 - [ ] 生成首个可替换旧程序的发布包

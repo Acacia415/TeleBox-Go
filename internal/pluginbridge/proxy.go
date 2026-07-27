@@ -98,6 +98,10 @@ func (p *storageProxy) Delete(
 	}, nil)
 }
 
+func (*storageProxy) Backup(context.Context, string) error {
+	return errors.New("external plugins cannot back up global storage")
+}
+
 func (*storageProxy) SetPluginState(context.Context, storage.PluginState) error {
 	return errors.New("external plugins cannot change global plugin state")
 }
@@ -163,9 +167,18 @@ func (p *toolProxy) Run(
 	ctx context.Context,
 	request toolrunner.Command,
 ) (toolrunner.Result, error) {
-	var result toolrunner.Result
-	err := call(ctx, p.peer, MethodToolRun, ToolRequest{Command: request}, &result)
-	return result, err
+	var response ToolResponse
+	err := call(ctx, p.peer, MethodToolRun, ToolRequest{Command: request}, &response)
+	if err != nil {
+		return response.Result, err
+	}
+	if response.Error != nil {
+		return response.Result, translateRemoteError(&pluginrpc.RemoteError{
+			Code:    response.Error.Code,
+			Message: response.Error.Message,
+		})
+	}
+	return response.Result, nil
 }
 
 type telegramProxy struct {
@@ -667,6 +680,10 @@ func call(
 	if !errors.As(err, &remote) {
 		return err
 	}
+	return translateRemoteError(remote)
+}
+
+func translateRemoteError(remote *pluginrpc.RemoteError) error {
 	var sentinel error
 	switch remote.Code {
 	case "storage_not_found":

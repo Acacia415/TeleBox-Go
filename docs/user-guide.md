@@ -179,17 +179,27 @@ journalctl --user -u telebox.service -f
 
 | 命令 | 说明 |
 | --- | --- |
-| `-ping` | 检查 Telegram 连接和消息延迟 |
+| `-ping [目标]` | 检查 Telegram、主机或 DC1–DC5 的网络延迟 |
 | `-status` | 查看版本、资源、插件数量和运行时间 |
+| `-sysinfo` | 查看系统、CPU、内存、磁盘和网络详情 |
 | `-help` | 查看命令名称列表 |
 | `-help 命令` | 查看指定命令的说明 |
 | `-update check` | 检查最新 TeleBox-Go 版本 |
 | `-update` | 更新 TeleBox-Go 并自动重启 |
-| `-update force` | 重新安装最新正式版 |
+| `-update force` / `-update -f` | 重新安装最新正式版 |
 | `-prefix show` | 查看当前命令前缀 |
 | `-prefix set -` | 把前缀设置为 `-` |
 | `-prefix add .` | 增加一个兼容前缀 |
 | `-prefix remove .` | 删除一个前缀 |
+| `-alias set de bd` | 创建动态命令别名 |
+| `-alias ls` | 查看动态命令别名 |
+| `-exec 命令` | 在主机执行 Shell 命令 |
+| `-loglevel [等级]` | 查看或动态设置日志等级 |
+| `-sendlog` | 发送、设置目标或清理日志 |
+| `-reload` | 重启全部已启用业务插件 |
+| `-restart` | 重启 TeleBox-Go 进程，兼容 `exit`、`pmr` |
+| `-bf` / `-hf` | 创建或恢复 TeleBox-Go 数据备份 |
+| `-sudo` / `-sure` | 管理委托命令和受控消息权限 |
 | `-p help` | 查看插件管理帮助 |
 
 `tpm` 是插件管理器的正式名称，`p` 和 `t` 是短别名。以下写法等价：
@@ -204,10 +214,12 @@ journalctl --user -u telebox.service -f
 
 主程序只内置核心管理命令，业务插件按需安装。
 
-查看已安装插件：
+查看已安装插件和详情：
 
 ```text
 -p ls
+-p ls -v
+-p lv
 ```
 
 搜索插件：
@@ -217,10 +229,11 @@ journalctl --user -u telebox.service -f
 -p s 关键词
 ```
 
-安装插件：
+安装一个或多个插件：
 
 ```text
 -p i bin
+-p i bin ip rate
 -p i bin@0.2.1
 ```
 
@@ -235,14 +248,17 @@ journalctl --user -u telebox.service -f
 ```text
 -p u
 -p u bin
+-p ua
+-p updateAll
 ```
 
-启用、停用和卸载：
+启用、停用和卸载一个或多个插件：
 
 ```text
 -p on bin
 -p off bin
--p rm bin
+-p rm bin ip
+-p rm all
 ```
 
 查看插件信息和检查安装状态：
@@ -251,6 +267,17 @@ journalctl --user -u telebox.service -f
 -p info bin
 -p doctor
 ```
+
+回复一个由 TeleBox-Go 插件 SDK 编译的 `.zip` 或 `.tar.gz` 插件包后发送
+`-p i`，可以本地安装。导出当前机器已安装的插件包：
+
+```text
+-p upload bin
+-p ul bin
+```
+
+本地包是所有者主动提供的，因此不会经过官方目录的 SHA-256 对照；它仍会
+接受归档路径、文件类型、体积、平台、插件 API 版本和 manifest 校验。
 
 插件包从项目的 GitHub Release 下载，并检查 HTTPS、文件大小和
 SHA-256。插件在独立子进程中运行，单个插件退出不会直接带停主程序。
@@ -350,8 +377,11 @@ journalctl --user -u telebox.service -n 50 --no-pager
 部分插件依赖系统工具，它们不属于 TeleBox-Go 框架：
 
 - `yt-dlp` 插件可以使用 `-yt update` 更新 yt-dlp。
+- `-yt setup` 可自动下载并校验 yt-dlp，`-yt doctor` 可检查完整环境。
+- YouTube 当前需要 JavaScript 运行时；服务器环境建议配置 Deno。
+- 服务器 IP 遇到 YouTube 风控时，可用 `-yt cookies` 和 `-yt proxy`
+  配置 Cookies 与代理；代理不能代替登录 Cookies。
 - 视频或音频转换通常需要 `ffmpeg`。
-- Ookla 测速插件需要 Speedtest CLI。
 - 多服务器测速需要 SSH 客户端。
 
 插件提示缺少工具时，应使用 Linux 发行版的软件包管理器或对应工具的
@@ -445,21 +475,110 @@ systemctl --user restart telebox.service
 - 只使用内置 `-update`、项目正式 Release 或一键安装脚本更新。
 - 插件安装后可运行 `-p doctor` 检查状态。
 
-## 14. 备份
+## 14. 从原版 TeleBox 备份迁移
 
-停止服务后再备份，避免复制到写入中的数据库：
+正式发布包中包含 `telebox-migrate`。它只用于首次迁移原版 TeleBox 的
+`.tar.gz` 全量备份，不用于恢复 `-bf` 创建的 TeleBox-Go 备份。
+
+建议在独立空目录中转换并测试，迁移器会拒绝覆盖已有配置、会话或资源目录：
 
 ```bash
-systemctl --user stop telebox.service
-tar -czf telebox-backup.tar.gz \
-  ~/.config/telebox \
-  ~/.local/share/telebox
-systemctl --user start telebox.service
+mkdir -m 700 ~/telebox-migration
+cd ~/telebox-migration
 ```
 
-备份包包含 API 配置和 Telegram 会话，应当加密保存。
+先检查备份。该命令只读取压缩包，不输出 API Hash、Session 或数据库内容：
 
-## 15. 常见问题
+```bash
+/path/to/telebox-migrate inspect \
+  -archive /path/to/telebox-backup.tar.gz
+```
+
+不带 `-apply` 的转换命令也是 dry-run，只显示检查结果：
+
+```bash
+/path/to/telebox-migrate convert \
+  -archive /path/to/telebox-backup.tar.gz \
+  -config config.json \
+  -session data/session.json \
+  -assets data/assets
+```
+
+确认无误后增加 `-apply`，生成 TeleBox-Go 配置、gotd 会话和插件资产：
+
+```bash
+/path/to/telebox-migrate convert \
+  -archive /path/to/telebox-backup.tar.gz \
+  -config config.json \
+  -session data/session.json \
+  -assets data/assets \
+  -apply
+```
+
+转换完成后先检查配置并启动：
+
+```bash
+/path/to/telebox -config config.json -check-config
+/path/to/telebox -config config.json
+```
+
+主程序只内置核心功能，迁移器不会把旧 TypeScript 插件作为 Go 插件安装。
+登录成功后在 Telegram 中安装当前官方插件：
+
+```text
+-p i all
+-p doctor
+```
+
+旧 alias、sudo、sure 和各插件的兼容数据会从迁移后的资产中读取，并在插件
+首次启动时写入 Go 版存储。原压缩包不会被修改。
+
+如果目标机器已经通过一键脚本运行 TeleBox-Go，不要直接覆盖正在使用的
+`~/.config/telebox` 或 `~/.local/share/telebox`。应先停止服务，在独立目录
+完成转换和启动验证，再把确认后的配置、会话和资产迁入正式目录。
+
+迁移完成并开始使用 TeleBox-Go 后，日常备份与恢复使用下面的 `-bf` 和
+`-hf`，不再使用 `telebox-migrate`。
+
+## 15. 备份
+
+标准备份包含已安装插件、插件资产和一致的 SQLite 数据库快照：
+
+```text
+-bf
+```
+
+全量备份另外包含 JSON 配置，但仍不会包含 Telegram 登录会话、日志和
+主程序：
+
+```text
+-bf all
+```
+
+管理默认发送目标，或只在本次发送到指定目标：
+
+```text
+-bf set me -1001234567890
+-bf to @username
+-bf del -1001234567890
+-bf del all
+```
+
+恢复时回复由 `-bf` 生成的 `.tar.gz` 文件并发送：
+
+```text
+-hf
+```
+
+程序会先检查备份格式、路径、文件类型、数量、体积和每个文件的 SHA-256，
+校验通过后暂存备份并重启。在数据库打开前应用恢复，当前文件会进入带时间戳
+的回滚目录。无效归档不会覆盖现有数据。
+
+如需操作系统级灾难恢复，可在停止服务后另外加密备份
+`~/.config/telebox` 与 `~/.local/share/telebox`；该方式会包含 API 配置和
+Telegram 会话，不应上传到公开位置。
+
+## 16. 常见问题
 
 ### 安装后没有登录提示
 
@@ -540,7 +659,7 @@ Telegram 客户端的“设备 → 活跃会话”页面可能需要重新打开
 
 同时检查 GitHub 网络连接、磁盘空间以及 TeleBox-Go 框架版本。
 
-## 16. 获取帮助
+## 17. 获取帮助
 
 - 使用手册：本文件
 - 项目主页：[Acacia415/TeleBox-Go](https://github.com/Acacia415/TeleBox-Go)

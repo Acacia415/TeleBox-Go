@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -106,6 +107,32 @@ func TestFrameworkUpdateCommand(t *testing.T) {
 	t.Fatal("update command was not registered")
 }
 
+func TestAliasCommandIsOwnerOnly(t *testing.T) {
+	t.Parallel()
+
+	router, err := command.NewRouter([]string{"-"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := New(
+		service.Container{},
+		router,
+		plugin.NewRegistry(router),
+		nil,
+		nil,
+	)
+	for _, definition := range candidate.Commands() {
+		if definition.Name != "alias" {
+			continue
+		}
+		if !definition.OwnerOnly {
+			t.Fatal("alias command must be owner-only")
+		}
+		return
+	}
+	t.Fatal("alias command was not registered")
+}
+
 func TestSplitPluginReference(t *testing.T) {
 	t.Parallel()
 	name, version := splitPluginReference("BIN@v1.2.3")
@@ -164,5 +191,83 @@ func TestFormatCommandHelpFindsAliases(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("command help %q does not contain %q", got, want)
 		}
+	}
+}
+
+func TestFormatCommandHelpIncludesUsageAndGuide(t *testing.T) {
+	t.Parallel()
+
+	got := formatCommandHelp("-", command.RouteInfo{
+		Name:        "speedlink",
+		Aliases:     []string{"sl"},
+		Description: "测速",
+		Usage:       []string{"sl", "sl all"},
+		HelpHTML:    "<b>完整教程</b>\n<code>{{prefix}}sl add</code>",
+		OwnerOnly:   true,
+	})
+	for _, want := range []string{
+		"<code>-sl</code>",
+		"<code>-sl all</code>",
+		"<b>完整教程</b>",
+		"<code>-sl add</code>",
+		"别名：<code>-sl</code>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("command help %q does not contain %q", got, want)
+		}
+	}
+}
+
+func TestFormatCommandHelpIncludesUserAliases(t *testing.T) {
+	t.Parallel()
+
+	got := formatCommandHelp(
+		"-",
+		command.RouteInfo{
+			Name:    "bulk_delete",
+			Aliases: []string{"bd"},
+		},
+		map[string]string{
+			"de":       "bd",
+			"clean 20": "bd 20",
+			"qa":       "yvlu",
+		},
+	)
+	for _, want := range []string{
+		"自定义别名：",
+		"<code>-de</code> → <code>-bd</code>",
+		"<code>-clean 20</code> → <code>-bd 20</code>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("command help %q does not contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "-qa") {
+		t.Fatalf("unrelated alias appears in help: %q", got)
+	}
+}
+
+func TestSplitAliasSetSupportsMultiWordAliases(t *testing.T) {
+	t.Parallel()
+
+	router, err := command.NewRouter([]string{"-"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := router.Register("test", command.Definition{
+		Name:    "bd",
+		Handler: func(context.Context, command.Request) error { return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	alias, target, err := splitAliasSet(
+		[]string{"delete", "everything", "bd", "20"},
+		router,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alias != "delete everything" || target != "bd 20" {
+		t.Fatalf("splitAliasSet() = %q -> %q", alias, target)
 	}
 }

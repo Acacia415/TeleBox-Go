@@ -27,7 +27,8 @@ func TestInspectAndConvertBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inventory.PluginCount != 2 || !reflect.DeepEqual(inventory.Plugins, []string{"bin", "ip"}) {
+	if inventory.PluginCount != 2 ||
+		!reflect.DeepEqual(inventory.Plugins, []string{"bin", "ip"}) {
 		t.Fatalf("plugins = %v", inventory.Plugins)
 	}
 	if inventory.SessionFormat != StringSessionGramJS || inventory.SessionDC != 2 {
@@ -53,6 +54,24 @@ func TestInspectAndConvertBackup(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(assetsPath, "_migration.json")); err != nil {
 		t.Fatalf("asset manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(assetsPath, "unsupported", "cache.db")); !os.IsNotExist(err) {
+		t.Fatalf("unsupported plugin asset was migrated: %v", err)
+	}
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var converted struct {
+		Plugins struct {
+			Enabled []string `json:"enabled"`
+		} `json:"plugins"`
+	}
+	if err := json.Unmarshal(configData, &converted); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(converted.Plugins.Enabled, []string{"bin", "ip"}) {
+		t.Fatalf("enabled plugins = %v", converted.Plugins.Enabled)
 	}
 	loader := session.Loader{Storage: &session.FileStorage{Path: sessionPath}}
 	data, err := loader.Load(context.Background())
@@ -128,10 +147,12 @@ func writeTestBackup(t *testing.T, target string) {
 	}
 
 	files := map[string][]byte{
-		"telebox/config.json":       configData,
-		"telebox/plugins/ip.ts":     []byte("export {}"),
-		"telebox/plugins/bin.ts":    []byte("export {}"),
-		"telebox/assets/ip/data.db": []byte("test"),
+		"telebox/config.json":                 configData,
+		"telebox/plugins/ip.ts":               []byte("export {}"),
+		"telebox/plugins/bin.ts":              []byte("export {}"),
+		"telebox/plugins/unsupported.ts":      []byte("export {}"),
+		"telebox/assets/ip/data.db":           []byte("test"),
+		"telebox/assets/unsupported/cache.db": []byte("do not migrate"),
 	}
 	for name, data := range files {
 		if err := archive.WriteHeader(&tar.Header{

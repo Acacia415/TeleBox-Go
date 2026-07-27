@@ -36,7 +36,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "aban",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "单群及跨管理群封禁管理",
 	}
 }
@@ -45,6 +45,7 @@ func (p *Plugin) Commands() []command.Definition {
 	definitions := []command.Definition{{
 		Name:        "aban",
 		Description: "显示封禁管理帮助",
+		Usage:       []string{"help aban"},
 		OwnerOnly:   true,
 		Handler:     p.help,
 	}}
@@ -59,6 +60,7 @@ func (p *Plugin) Commands() []command.Definition {
 		definitions = append(definitions, command.Definition{
 			Name:        string(action),
 			Description: actionDescription(action),
+			Usage:       moderationUsage(action),
 			OwnerOnly:   true,
 			Handler: func(ctx context.Context, request command.Request) error {
 				return p.moderate(ctx, request, action)
@@ -69,6 +71,7 @@ func (p *Plugin) Commands() []command.Definition {
 		command.Definition{
 			Name:        "sb",
 			Description: "在所有有管理权限的群组中封禁用户",
+			Usage:       []string{"sb [@用户|用户ID]（或回复消息）"},
 			OwnerOnly:   true,
 			Handler: func(ctx context.Context, request command.Request) error {
 				return p.superModerate(ctx, request, telegram.ModerationBan)
@@ -77,6 +80,7 @@ func (p *Plugin) Commands() []command.Definition {
 		command.Definition{
 			Name:        "unsb",
 			Description: "在所有有管理权限的群组中解封用户",
+			Usage:       []string{"unsb [@用户|用户ID]（或回复消息）"},
 			OwnerOnly:   true,
 			Handler: func(ctx context.Context, request command.Request) error {
 				return p.superModerate(ctx, request, telegram.ModerationUnban)
@@ -85,6 +89,7 @@ func (p *Plugin) Commands() []command.Definition {
 		command.Definition{
 			Name:        "refresh",
 			Description: "刷新有管理权限的群组缓存",
+			Usage:       []string{"refresh"},
 			OwnerOnly:   true,
 			Handler:     p.refresh,
 		},
@@ -98,6 +103,13 @@ func (p *Plugin) Stop(context.Context) error { return nil }
 
 func (p *Plugin) help(ctx context.Context, request command.Request) error {
 	return p.respond(ctx, request, helpText(request.Prefix))
+}
+
+func moderationUsage(action telegram.ModerationAction) []string {
+	if action == telegram.ModerationMute {
+		return []string{"mute [@用户|用户ID] [30s|10m|2h|7d]（或回复消息）"}
+	}
+	return []string{string(action) + " [@用户|用户ID]（或回复消息）"}
 }
 
 func (p *Plugin) moderate(

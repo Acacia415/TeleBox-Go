@@ -39,3 +39,18 @@ func TestLookupCurrencyAndFormatting(t *testing.T) {
 		}
 	}
 }
+
+func TestFiatValueSupportsOriginalUpstreamShapes(t *testing.T) {
+	t.Parallel()
+
+	for _, payload := range []map[string]any{
+		{"rates": map[string]any{"CNY": 7.25}},
+		{"data": map[string]any{"rates": map[string]any{"CNY": "7.25"}}},
+		{"usd": map[string]any{"cny": 7.25}},
+	} {
+		value, ok := fiatValue(payload, "usd", "CNY")
+		if !ok || value != 7.25 {
+			t.Fatalf("fiatValue(%#v) = %v, %v", payload, value, ok)
+		}
+	}
+}

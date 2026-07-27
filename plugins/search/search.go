@@ -28,9 +28,10 @@ const (
 )
 
 type channel struct {
-	Title  string `json:"title"`
-	Handle string `json:"handle"`
-	ChatID int64  `json:"chat_id"`
+	Title        string `json:"title"`
+	Handle       string `json:"handle"`
+	ChatID       int64  `json:"chat_id"`
+	LinkedChatID int64  `json:"linked_chat_id,omitempty"`
 }
 
 type config struct {
@@ -55,26 +56,30 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "search",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "多频道视频资源搜索、随机速览与广告过滤",
 	}
 }
 
 func (p *Plugin) Commands() []command.Definition {
-	return []command.Definition{
-		{
-			Name:        "so",
-			Description: "搜索已配置频道中的视频",
-			OwnerOnly:   true,
-			Handler:     p.handle,
+	return []command.Definition{{
+		Name:        "search",
+		Aliases:     []string{"so"},
+		Description: "搜索已配置频道中的视频",
+		Usage: []string{
+			"so <关键词> [-r] [-s]",
+			"so kkp [-s]",
+			"so add <频道>（多个用 \\ 分隔）",
+			"so del <频道|序号|all>",
+			"so default <频道|序号|d>",
+			"so list",
+			"so export",
+			"so import（回复配置文件）",
+			"so ad <add|del|list> [关键词]",
 		},
-		{
-			Name:        "search",
-			Description: "搜索已配置频道中的视频",
-			OwnerOnly:   true,
-			Handler:     p.handle,
-		},
-	}
+		OwnerOnly: true,
+		Handler:   p.handle,
+	}}
 }
 
 func (p *Plugin) Start(context.Context) error { return nil }
@@ -138,9 +143,10 @@ func (p *Plugin) add(ctx context.Context, request command.Request, cfg *config) 
 			continue
 		}
 		cfg.Channels = append(cfg.Channels, channel{
-			Title:  chat.Title,
-			Handle: target,
-			ChatID: chat.ID,
+			Title:        chat.Title,
+			Handle:       target,
+			ChatID:       chat.ID,
+			LinkedChatID: chat.LinkedChatID,
 		})
 		added = append(added, chat.Title)
 		if cfg.Default == "" {
@@ -312,7 +318,10 @@ func (p *Plugin) importConfig(
 			continue
 		}
 		next.Channels = append(next.Channels, channel{
-			Title: chat.Title, Handle: target, ChatID: chat.ID,
+			Title:        chat.Title,
+			Handle:       target,
+			ChatID:       chat.ID,
+			LinkedChatID: chat.LinkedChatID,
 		})
 		if next.Default == "" {
 			next.Default = target
@@ -403,12 +412,7 @@ func (p *Plugin) search(
 			case <-time.After(250 * time.Millisecond):
 			}
 		}
-		messages, err := p.services.Telegram.GetHistory(ctx, telegram.HistoryQuery{
-			ChatID:    source.ChatID,
-			Limit:     maxSearchResult,
-			Search:    query,
-			MediaKind: telegram.MediaVideo,
-		})
+		messages, err := p.searchSource(ctx, source, query, query == "")
 		if err != nil {
 			p.services.Logger.Warn("search source failed",
 				"source", source.Handle,
@@ -417,7 +421,11 @@ func (p *Plugin) search(
 			continue
 		}
 		for _, message := range messages {
-			if !isUsableVideo(message, query, cfg.AdFilters, query == "") {
+			if query == "" {
+				if !isUsableVideo(message, query, cfg.AdFilters, true) {
+					continue
+				}
+			} else if !isVideo(message) || isAd(message, cfg.AdFilters) {
 				continue
 			}
 			candidates = append(candidates, candidate{
@@ -471,6 +479,141 @@ func (p *Plugin) search(
 		}
 	}
 	return p.deleteCommand(ctx, request)
+}
+
+func (p *Plugin) searchSource(
+	ctx context.Context,
+	source channel,
+	query string,
+	randomPreview bool,
+) ([]telegram.Message, error) {
+	if randomPreview {
+		return p.services.Telegram.GetHistory(ctx, telegram.HistoryQuery{
+			ChatID:    source.ChatID,
+			Limit:     maxSearchResult,
+			MediaKind: telegram.MediaVideo,
+		})
+	}
+	result := make([]telegram.Message, 0)
+	processedGroups := make(map[int64]struct{})
+	if source.LinkedChatID != 0 {
+		linked, err := p.searchLinkedDiscussion(ctx, source.LinkedChatID, query)
+		if err != nil {
+			p.services.Logger.Warn(
+				"search linked discussion failed",
+				"source", source.Handle,
+				"error", err,
+			)
+		} else {
+			result = append(result, linked...)
+		}
+	}
+	found, err := p.services.Telegram.GetHistory(ctx, telegram.HistoryQuery{
+		ChatID: source.ChatID,
+		Limit:  maxSearchResult,
+		Search: query,
+	})
+	if err != nil {
+		return result, err
+	}
+	for _, message := range found {
+		if !fuzzyMatch(message.Text+" "+mediaFileName(message), query) {
+			continue
+		}
+		if message.GroupedID != 0 {
+			if _, exists := processedGroups[message.GroupedID]; exists {
+				continue
+			}
+			processedGroups[message.GroupedID] = struct{}{}
+			surrounding, historyErr := p.services.Telegram.GetHistory(
+				ctx,
+				telegram.HistoryQuery{
+					ChatID:   source.ChatID,
+					Limit:    20,
+					OffsetID: message.ID + 10,
+				},
+			)
+			if historyErr == nil {
+				for _, item := range surrounding {
+					if item.GroupedID == message.GroupedID && isVideo(item) {
+						result = append(result, item)
+					}
+				}
+			}
+			continue
+		}
+		if isVideo(message) {
+			result = append(result, message)
+		}
+	}
+	return result, nil
+}
+
+func (p *Plugin) searchLinkedDiscussion(
+	ctx context.Context,
+	chatID int64,
+	query string,
+) ([]telegram.Message, error) {
+	textMessages, err := p.services.Telegram.GetHistory(ctx, telegram.HistoryQuery{
+		ChatID: chatID,
+		Limit:  maxSearchResult,
+		Search: query,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result []telegram.Message
+	checked := 0
+	for _, message := range textMessages {
+		if !fuzzyMatch(message.Text+" "+mediaFileName(message), query) {
+			continue
+		}
+		if checked >= 20 {
+			break
+		}
+		checked++
+		replies, replyErr := p.services.Telegram.GetHistory(ctx, telegram.HistoryQuery{
+			ChatID:    chatID,
+			Limit:     maxSearchResult,
+			ReplyToID: message.ID,
+		})
+		if replyErr != nil {
+			continue
+		}
+		for _, reply := range replies {
+			if isVideo(reply) {
+				result = append(result, reply)
+			}
+		}
+		if len(result) > 0 {
+			return result, nil
+		}
+	}
+	if len(result) == 0 {
+		videos, videoErr := p.services.Telegram.GetHistory(ctx, telegram.HistoryQuery{
+			ChatID:    chatID,
+			Limit:     maxSearchResult,
+			Search:    query,
+			MediaKind: telegram.MediaVideo,
+		})
+		if videoErr == nil {
+			result = append(result, videos...)
+		}
+	}
+	return result, nil
+}
+
+func isVideo(message telegram.Message) bool {
+	return message.Media != nil &&
+		(message.Media.Kind == telegram.MediaVideo ||
+			message.Media.Kind == telegram.MediaAnimation)
+}
+
+func mediaFileName(message telegram.Message) string {
+	if message.Media == nil {
+		return ""
+	}
+	return message.Media.FileName
 }
 
 func (p *Plugin) sendSpoiler(

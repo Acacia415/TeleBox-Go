@@ -60,7 +60,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "rate",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "法币与主流加密货币汇率查询",
 	}
 }
@@ -70,6 +70,7 @@ func (p *Plugin) Commands() []command.Definition {
 		{
 			Name:        "rate",
 			Description: "查询两种货币的汇率与数量换算",
+			Usage:       []string{"rate <基准币> [目标币] [数量]"},
 			OwnerOnly:   true,
 			Handler:     p.handle,
 		},
@@ -210,33 +211,156 @@ func (p *Plugin) fetchRate(ctx context.Context, base, quote currency) (float64, 
 }
 
 func (p *Plugin) fetchFiatRate(ctx context.Context, base, quote string) (float64, time.Time, error) {
-	query := url.Values{
-		"base":    []string{strings.ToUpper(base)},
-		"symbols": []string{strings.ToUpper(quote)},
+	base = strings.ToUpper(base)
+	quote = strings.ToUpper(quote)
+	endpoints := []struct {
+		name string
+		url  string
+	}{
+		{
+			name: "exchangerate.host",
+			url: "https://api.exchangerate.host/latest?base=" +
+				url.QueryEscape(base),
+		},
+		{
+			name: "open.er-api",
+			url: "https://open.er-api.com/v6/latest/" +
+				url.PathEscape(base),
+		},
+		{
+			name: "Frankfurter",
+			url: "https://api.frankfurter.dev/v1/latest?" + url.Values{
+				"base":    []string{base},
+				"symbols": []string{quote},
+			}.Encode(),
+		},
+		{
+			name: "Coinbase",
+			url: "https://api.coinbase.com/v2/exchange-rates?currency=" +
+				url.QueryEscape(base),
+		},
+		{
+			name: "currency-api",
+			url: "https://cdn.jsdelivr.net/gh/fawazahmed0/currency-api@1/latest/currencies/" +
+				url.PathEscape(strings.ToLower(base)) + ".json",
+		},
 	}
-	endpoint := "https://api.frankfurter.dev/v1/latest?" + query.Encode()
-	var payload struct {
-		Date  string             `json:"date"`
-		Rates map[string]float64 `json:"rates"`
+	var failures []string
+	for _, endpoint := range endpoints {
+		var payload map[string]any
+		response, err := p.services.HTTP.JSON(ctx, httpclient.Request{
+			URL: endpoint.url,
+		}, &payload)
+		if err != nil {
+			failures = append(failures, endpoint.name+": "+err.Error())
+			continue
+		}
+		if response.StatusCode != http.StatusOK {
+			failures = append(failures,
+				fmt.Sprintf("%s: HTTP %d", endpoint.name, response.StatusCode))
+			continue
+		}
+		value, ok := fiatValue(payload, strings.ToLower(base), quote)
+		if !ok || value <= 0 {
+			failures = append(failures, endpoint.name+": 未返回目标汇率")
+			continue
+		}
+		return value, payloadTime(payload, p.now()), nil
 	}
-	response, err := p.services.HTTP.JSON(ctx, httpclient.Request{
-		URL: endpoint,
-	}, &payload)
-	if err != nil {
-		return 0, time.Time{}, err
+	if len(failures) > 3 {
+		failures = failures[len(failures)-3:]
 	}
-	if response.StatusCode != http.StatusOK {
-		return 0, time.Time{}, fmt.Errorf("Frankfurter HTTP %d", response.StatusCode)
+	return 0, time.Time{}, errors.New("法币汇率服务不可用：" + strings.Join(failures, "；"))
+}
+
+func fiatValue(payload map[string]any, baseLower, quoteUpper string) (float64, bool) {
+	candidates := []any{payload["rates"]}
+	if data, ok := payload["data"].(map[string]any); ok {
+		candidates = append(candidates, data["rates"])
 	}
-	value := payload.Rates[strings.ToUpper(quote)]
-	updatedAt := p.now()
-	if parsed, err := time.Parse("2006-01-02", payload.Date); err == nil {
-		updatedAt = parsed
+	candidates = append(candidates, payload[baseLower], payload[strings.ToUpper(baseLower)])
+	for _, candidate := range candidates {
+		rates, ok := candidate.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{quoteUpper, strings.ToLower(quoteUpper)} {
+			if value, ok := numericValue(rates[key]); ok {
+				return value, true
+			}
+		}
 	}
-	return value, updatedAt, nil
+	return 0, false
+}
+
+func payloadTime(payload map[string]any, fallback time.Time) time.Time {
+	for _, key := range []string{"time_last_update_unix", "timestamp"} {
+		if timestamp, ok := numericValue(payload[key]); ok && timestamp > 0 {
+			return time.Unix(int64(timestamp), 0)
+		}
+	}
+	if text, ok := payload["date"].(string); ok {
+		if parsed, err := time.Parse("2006-01-02", text); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func numericValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, !math.IsNaN(typed) && !math.IsInf(typed, 0)
+	case json.Number:
+		number, err := typed.Float64()
+		return number, err == nil
+	case string:
+		number, err := strconv.ParseFloat(typed, 64)
+		return number, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func (p *Plugin) fetchCryptoFiat(
+	ctx context.Context,
+	coin currency,
+	quote string,
+) (float64, time.Time, error) {
+	if isStablecoin(coin.Code) {
+		if value, updatedAt, err := p.fetchCoinGeckoFiat(ctx, coin, quote); err == nil {
+			return value, updatedAt, nil
+		}
+		if strings.EqualFold(quote, "USD") {
+			return 1, p.now(), nil
+		}
+		return p.fetchFiatRate(ctx, "USD", quote)
+	}
+	var failures []string
+	for _, bridge := range []string{"USDT", "BUSD", "USDC"} {
+		bridgePrice, err := p.fetchBinancePrice(ctx, coin.Code+bridge)
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		if strings.EqualFold(quote, bridge) || strings.EqualFold(quote, "USD") {
+			return bridgePrice, p.now(), nil
+		}
+		fiatRate, _, err := p.fetchFiatRate(ctx, "USD", quote)
+		if err == nil {
+			return bridgePrice * fiatRate, p.now(), nil
+		}
+		failures = append(failures, err.Error())
+	}
+	value, updatedAt, err := p.fetchCoinGeckoFiat(ctx, coin, quote)
+	if err == nil {
+		return value, updatedAt, nil
+	}
+	failures = append(failures, err.Error())
+	return 0, time.Time{}, errors.New(strings.Join(failures, "；"))
+}
+
+func (p *Plugin) fetchCoinGeckoFiat(
 	ctx context.Context,
 	coin currency,
 	quote string,
@@ -272,6 +396,19 @@ func (p *Plugin) fetchCryptoCross(
 	base currency,
 	quote currency,
 ) (float64, time.Time, error) {
+	if value, err := p.fetchBinancePrice(ctx, base.Code+quote.Code); err == nil {
+		return value, p.now(), nil
+	}
+	if inverse, err := p.fetchBinancePrice(ctx, quote.Code+base.Code); err == nil && inverse > 0 {
+		return 1 / inverse, p.now(), nil
+	}
+	for _, bridge := range []string{"USDT", "BUSD", "USDC"} {
+		basePrice, baseErr := p.fetchBinancePrice(ctx, base.Code+bridge)
+		quotePrice, quoteErr := p.fetchBinancePrice(ctx, quote.Code+bridge)
+		if baseErr == nil && quoteErr == nil && quotePrice > 0 {
+			return basePrice / quotePrice, p.now(), nil
+		}
+	}
 	query := url.Values{
 		"ids":                     []string{base.ID + "," + quote.ID},
 		"vs_currencies":           []string{"usd"},
@@ -296,6 +433,35 @@ func (p *Plugin) fetchCryptoCross(
 		updatedAt = time.Unix(int64(timestamp), 0)
 	}
 	return baseUSD / quoteUSD, updatedAt, nil
+}
+
+func (p *Plugin) fetchBinancePrice(ctx context.Context, symbol string) (float64, error) {
+	endpoint := "https://api.binance.com/api/v3/ticker/price?symbol=" +
+		url.QueryEscape(strings.ToUpper(symbol))
+	var payload struct {
+		Price json.Number `json:"price"`
+	}
+	response, err := p.services.HTTP.JSON(ctx, httpclient.Request{URL: endpoint}, &payload)
+	if err != nil {
+		return 0, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("Binance %s: HTTP %d", symbol, response.StatusCode)
+	}
+	value, err := numberFloat(payload.Price)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("Binance 未返回 %s", symbol)
+	}
+	return value, nil
+}
+
+func isStablecoin(code string) bool {
+	switch strings.ToUpper(code) {
+	case "USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD":
+		return true
+	default:
+		return false
+	}
 }
 
 func numberFloat(number json.Number) (float64, error) {

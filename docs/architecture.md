@@ -4,7 +4,7 @@
 
 1. 使用 Go 和 `gotd/td` 替换 Node/teleproto 运行时。
 2. 保留旧命令、权限、消息操作和插件数据的可迁移性。
-3. 只迁移全量备份中实际存在的 27 个插件。
+3. 只迁移当前目录中保留的 25 个业务插件。
 4. 框架只内置基本能力，业务插件可以独立安装和维护。
 5. 单个插件故障不得终止消息循环或影响其他插件。
 6. 框架、插件源码和发布工具保留在同一个 monorepo。
@@ -81,18 +81,30 @@ RPC 实现和官方插件构建细节放在 `internal`，防止它们被误当�
 ```text
 p i      install
 p u      update
+p ua     update all
 p rm     remove
 p ls     list
 p s      search
+p upload export installed package
 p on     enable
 p off    disable
 ```
+
+插件管理支持一次安装或卸载多个插件，也支持回复已编译的 ZIP/TAR.GZ
+插件包本地安装。官方目录安装仍要求 HTTPS 和 SHA-256；本地包由所有者主动
+提供，因此会明确提示其绕过目录校验。无论来源，归档路径、体积、平台、
+插件 API 版本和 manifest 都必须通过校验。
 
 ## 数据与备份
 
 新系统以 SQLite 为主要持久化存储。旧 SQLite、LowDB JSON、配置文件和
 媒体资产由一次性迁移器导入。迁移器不得写入备份包，并记录来源、校验值、
 迁移版本、结果和导入数量。
+
+运行时 `bf` 使用 SQLite `VACUUM INTO` 获取一致快照，并对备份内每个文件
+记录 SHA-256。`hf` 先执行路径、类型、数量、体积和摘要校验，再暂存到数据
+目录同一文件系统；主进程重启并在打开数据库前原子应用，旧文件保存在带
+时间戳的回滚目录。Telegram 登录会话、日志和可执行文件不进入该备份。
 
 GramJS/teleproto StringSession 与 gotd 会话格式不同。迁移阶段只转换可验证
 的 DC、地址和 auth key；无法验证时明确回退为 QR 登录。

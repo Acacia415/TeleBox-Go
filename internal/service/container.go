@@ -16,6 +16,7 @@ type Storage interface {
 	Put(context.Context, string, string, []byte) error
 	Get(context.Context, string, string) ([]byte, error)
 	Delete(context.Context, string, string) error
+	Backup(context.Context, string) error
 	SetPluginState(context.Context, storage.PluginState) error
 	PluginStates(context.Context) ([]storage.PluginState, error)
 	Close() error
@@ -39,16 +40,27 @@ type Scheduler interface {
 	Stop(context.Context) error
 }
 
+type LogLevelController interface {
+	Level() slog.Level
+	Set(slog.Level)
+}
+
 // Container is the stable dependency surface provided to built-in and migrated
 // plugins. Keep application wiring here and Telegram implementation details
 // behind telegram.Client.
 type Container struct {
-	Logger    *slog.Logger
-	Telegram  telegram.Client
-	Storage   Storage
-	Tools     ToolRunner
-	Scheduler Scheduler
-	AssetsDir string
-	HTTP      HTTPClient
-	Restart   func()
+	Logger      *slog.Logger
+	Telegram    telegram.Client
+	Storage     Storage
+	Tools       ToolRunner
+	Scheduler   Scheduler
+	AssetsDir   string
+	ConfigPath  string
+	StoragePath string
+	PluginsDir  string
+	SessionPath string
+	HTTP        HTTPClient
+	LogLevel    LogLevelController
+	LogPath     string
+	Restart     func()
 }

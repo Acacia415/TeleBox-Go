@@ -64,7 +64,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "zhijiao",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "使用廿七句杯卦卦辞掷筊",
 	}
 }
@@ -73,6 +73,7 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "zhijiao",
 		Description: "掷筊",
+		Usage:       []string{"zhijiao"},
 		OwnerOnly:   true,
 		Handler:     p.handle,
 	}}

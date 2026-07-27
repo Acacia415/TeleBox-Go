@@ -30,7 +30,20 @@ func (c *Client) GetHistory(
 	}
 
 	var result tg.MessagesMessagesClass
-	if strings.TrimSpace(request.Search) != "" || request.MediaKind != "" ||
+	if request.ReplyToID > 0 {
+		result, err = c.raw.API().MessagesGetReplies(
+			ctx,
+			&tg.MessagesGetRepliesRequest{
+				Peer:      peer,
+				MsgID:     request.ReplyToID,
+				OffsetID:  request.OffsetID,
+				AddOffset: request.AddOffset,
+				Limit:     request.Limit,
+				MaxID:     request.MaxID,
+				MinID:     request.MinID,
+			},
+		)
+	} else if strings.TrimSpace(request.Search) != "" || request.MediaKind != "" ||
 		request.FromUserID != 0 {
 		search := &tg.MessagesSearchRequest{
 			Peer:     peer,

@@ -177,6 +177,77 @@ func TestInstalledKeepsValidPluginsWhenOneIsCorrupt(t *testing.T) {
 	}
 }
 
+func TestInstallAndExportLocalArchive(t *testing.T) {
+	t.Parallel()
+
+	archive := testPluginArchive(t, map[string]string{
+		"plugin.json": `{
+			"schema_version": 1,
+			"api_version": 1,
+			"name": "local",
+			"version": "1.2.3",
+			"description": "Local plugin",
+			"executable": "telebox-plugin-local",
+			"commands": [{"name": "local"}]
+		}`,
+		"telebox-plugin-local": "binary",
+	})
+	root := t.TempDir()
+	manager, err := New(Config{
+		Directory:       filepath.Join(root, "plugins"),
+		CatalogURL:      "https://example.com/catalog.json",
+		MaxArchiveBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := manager.InspectArchive(archive, "tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Name != "local" {
+		t.Fatalf("manifest = %#v", manifest)
+	}
+	result, err := manager.InstallArchive(
+		context.Background(),
+		archive,
+		"tar.gz",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Installed.Manifest.Version != "1.2.3" {
+		t.Fatalf("result = %#v", result)
+	}
+	exported := filepath.Join(root, "local.zip")
+	if _, err := manager.Export("local", exported); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(exported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := New(Config{
+		Directory:       filepath.Join(root, "plugins-second"),
+		CatalogURL:      "https://example.com/catalog.json",
+		MaxArchiveBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reinstalled, err := second.InstallArchive(
+		context.Background(),
+		data,
+		"zip",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reinstalled.Installed.Manifest.Name != "local" {
+		t.Fatalf("reinstalled = %#v", reinstalled)
+	}
+}
+
 func testPluginArchive(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var output bytes.Buffer

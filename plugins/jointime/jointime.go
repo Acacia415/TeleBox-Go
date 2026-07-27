@@ -25,7 +25,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "jointime",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "查询用户加入群组的时间",
 	}
 }
@@ -35,8 +35,13 @@ func (p *Plugin) Commands() []command.Definition {
 		Name:        "jointime",
 		Aliases:     []string{"jt"},
 		Description: "查询普通成员记录或扫描入群服务消息",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"jt <@用户名|用户ID>",
+			"jt（回复目标消息）",
+			"jt su [@用户名|用户ID]（或回复消息）",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -137,6 +138,29 @@ func (d *DB) Close() error {
 
 func (d *DB) Ping(ctx context.Context) error {
 	return d.sql.PingContext(ctx)
+}
+
+// Backup writes a transactionally consistent, self-contained SQLite copy.
+// VACUUM INTO also folds WAL contents into the destination database.
+func (d *DB) Backup(ctx context.Context, destination string) error {
+	if strings.TrimSpace(destination) == "" {
+		return errors.New("backup destination is required")
+	}
+	absolute, err := filepath.Abs(destination)
+	if err != nil {
+		return fmt.Errorf("resolve backup destination: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
+		return fmt.Errorf("create backup directory: %w", err)
+	}
+	_ = os.Remove(absolute)
+	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO ?", absolute); err != nil {
+		return fmt.Errorf("backup SQLite database: %w", err)
+	}
+	if err := os.Chmod(absolute, 0o600); err != nil {
+		return fmt.Errorf("protect SQLite backup: %w", err)
+	}
+	return nil
 }
 
 func (d *DB) SetPluginState(ctx context.Context, state PluginState) error {

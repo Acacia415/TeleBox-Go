@@ -91,6 +91,56 @@ func (c *Controller) Install(
 	return c.install(ctx, name, version, true)
 }
 
+func (c *Controller) InstallArchive(
+	ctx context.Context,
+	archive []byte,
+	format string,
+) (pluginmarket.InstallResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	manifest, err := c.market.InspectArchive(archive, format)
+	if err != nil {
+		return pluginmarket.InstallResult{}, err
+	}
+	name := normalizePackageReference(manifest.Name)
+	if name == "core" {
+		return pluginmarket.InstallResult{}, errors.New(
+			"core is part of TeleBox and cannot be installed separately",
+		)
+	}
+	previousStatus, wasRegistered := c.registry.Status(name)
+	if wasRegistered {
+		if err := c.registry.Remove(ctx, name); err != nil {
+			return pluginmarket.InstallResult{}, err
+		}
+	}
+	result, err := c.market.InstallArchive(ctx, archive, format)
+	if err != nil {
+		restoreErr := c.restore(name, previousStatus, wasRegistered)
+		return pluginmarket.InstallResult{}, errors.Join(err, restoreErr)
+	}
+	if err := c.register(result.Installed); err != nil {
+		return result, err
+	}
+	shouldEnable := activationAfterInstall(true, previousStatus, wasRegistered)
+	if shouldEnable {
+		if err := c.registry.Enable(ctx, name); err != nil {
+			return result, err
+		}
+	}
+	if err := c.persist(ctx, name, shouldEnable); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (c *Controller) Export(name, destination string) (pluginmarket.Installed, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.market.Export(normalizePackageReference(name), destination)
+}
+
 func (c *Controller) install(
 	ctx context.Context,
 	name string,

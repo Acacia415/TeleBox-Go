@@ -38,7 +38,21 @@ func (p *Plugin) requestConfig(
 	ctx context.Context,
 	requested feature,
 ) (requestConfig, error) {
-	selected := p.currentProvider(ctx)
+	candidates := p.providerCandidates(ctx, requested)
+	if len(candidates) == 0 {
+		return requestConfig{}, fmt.Errorf(
+			"没有已配置且支持 %s 的服务商",
+			requested,
+		)
+	}
+	return p.requestConfigFor(ctx, candidates[0], requested)
+}
+
+func (p *Plugin) requestConfigFor(
+	ctx context.Context,
+	selected provider,
+	requested feature,
+) (requestConfig, error) {
 	protocol := selected
 	if selected == providerThirdParty {
 		protocol = p.compatProvider(ctx)
@@ -97,33 +111,72 @@ func (p *Plugin) generateImage(
 	ctx context.Context,
 	prompt string,
 ) (generationResult, requestConfig, error) {
-	cfg, err := p.requestConfig(ctx, featureImage)
-	if err != nil {
-		return generationResult{}, cfg, err
+	var (
+		lastConfig requestConfig
+		failures   []string
+	)
+	for _, selected := range p.providerCandidates(ctx, featureImage) {
+		cfg, err := p.requestConfigFor(ctx, selected, featureImage)
+		lastConfig = cfg
+		if err != nil {
+			failures = append(failures, string(selected)+": "+err.Error())
+			continue
+		}
+		var result generationResult
+		if cfg.Protocol == providerGemini {
+			result, err = p.geminiMedia(ctx, cfg, prompt, false, "")
+		} else {
+			result, err = p.openAIImage(ctx, cfg, prompt)
+		}
+		if err == nil {
+			return result, cfg, nil
+		}
+		failures = append(failures, string(selected)+": "+err.Error())
 	}
-	if cfg.Protocol == providerGemini {
-		result, err := p.geminiMedia(ctx, cfg, prompt, false, "")
-		return result, cfg, err
+	if len(failures) == 0 {
+		return generationResult{}, lastConfig,
+			errors.New("没有已配置且支持图片生成的服务商")
 	}
-	result, err := p.openAIImage(ctx, cfg, prompt)
-	return result, cfg, err
+	return generationResult{}, lastConfig,
+		errors.New("所有图片生成服务均不可用：" + strings.Join(failures, "；"))
 }
 
 func (p *Plugin) generateSpeech(
 	ctx context.Context,
 	text string,
 ) (generationResult, requestConfig, error) {
-	cfg, err := p.requestConfig(ctx, featureTTS)
-	if err != nil {
-		return generationResult{}, cfg, err
+	var (
+		lastConfig requestConfig
+		failures   []string
+	)
+	for _, selected := range p.providerCandidates(ctx, featureTTS) {
+		cfg, err := p.requestConfigFor(ctx, selected, featureTTS)
+		lastConfig = cfg
+		if err != nil {
+			failures = append(failures, string(selected)+": "+err.Error())
+			continue
+		}
+		voice := p.read(ctx, "tts_voice", defaultVoice(cfg.Protocol))
+		if !voiceCompatible(voice, cfg.Protocol) {
+			voice = defaultVoice(cfg.Protocol)
+		}
+		var result generationResult
+		if cfg.Protocol == providerGemini {
+			result, err = p.geminiMedia(ctx, cfg, text, true, voice)
+		} else {
+			result, err = p.openAISpeech(ctx, cfg, text, voice)
+		}
+		if err == nil {
+			return result, cfg, nil
+		}
+		failures = append(failures, string(selected)+": "+err.Error())
 	}
-	voice := p.read(ctx, "tts_voice", defaultVoice(cfg.Protocol))
-	if cfg.Protocol == providerGemini {
-		result, err := p.geminiMedia(ctx, cfg, text, true, voice)
-		return result, cfg, err
+	if len(failures) == 0 {
+		return generationResult{}, lastConfig,
+			errors.New("没有已配置且支持语音生成的服务商")
 	}
-	result, err := p.openAISpeech(ctx, cfg, text, voice)
-	return result, cfg, err
+	return generationResult{}, lastConfig,
+		errors.New("所有语音生成服务均不可用：" + strings.Join(failures, "；"))
 }
 
 func (p *Plugin) geminiText(
@@ -587,6 +640,31 @@ func defaultVoice(protocol provider) string {
 		return "Kore"
 	}
 	return "alloy"
+}
+
+func voiceCompatible(voice string, protocol provider) bool {
+	voice = strings.ToLower(strings.TrimSpace(voice))
+	if protocol == providerGemini {
+		for _, candidate := range strings.Fields(
+			"achernar achird algenib algieba alnilam aoede autonoe callirrhoe " +
+				"charon despina enceladus erinome fenrir gacrux iapetus kore " +
+				"laomedeia leda orus puck pulcherrima rasalgethi sadachbia " +
+				"sadaltager schedar sulafat umbriel vindemiatrix zephyr zubenelgenubi",
+		) {
+			if voice == candidate {
+				return true
+			}
+		}
+		return false
+	}
+	for _, candidate := range strings.Fields(
+		"alloy ash ballad coral echo fable nova onyx sage shimmer verse",
+	) {
+		if voice == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmpty(values ...string) string {

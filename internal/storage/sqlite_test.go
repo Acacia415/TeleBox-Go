@@ -85,3 +85,36 @@ func TestPluginStatesAreUpsertedAndSorted(t *testing.T) {
 		t.Fatal("zeta state was not updated")
 	}
 }
+
+func TestBackupIncludesCommittedWALData(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	directory := t.TempDir()
+	store, err := Open(ctx, filepath.Join(directory, "telebox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.Put(ctx, "core", "answer", []byte("42")); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(directory, "backup", "telebox.db")
+	if err := store.Backup(ctx, backupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	backup, err := Open(ctx, backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backup.Close()
+	value, err := backup.Get(ctx, "core", "answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(value) != "42" {
+		t.Fatalf("backup value = %q, want 42", value)
+	}
+}

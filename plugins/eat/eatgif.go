@@ -77,7 +77,7 @@ func NewGIF(services service.Container) *GIFPlugin {
 func (p *GIFPlugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eatgif",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "将双方头像逐帧合成到动态表情模板",
 	}
 }
@@ -86,8 +86,13 @@ func (p *GIFPlugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "eatgif",
 		Description: "生成头像融合动态贴纸",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"eatgif list",
+			"eatgif <模板名>（回复用户）",
+			"eatgif clear",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 

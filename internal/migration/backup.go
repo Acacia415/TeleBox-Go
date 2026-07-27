@@ -19,6 +19,7 @@ import (
 	"github.com/gotd/td/session"
 
 	"github.com/Acacia415/TeleBox-Go/internal/config"
+	"github.com/Acacia415/TeleBox-Go/internal/pluginspec"
 )
 
 const (
@@ -77,7 +78,7 @@ func InspectBackup(archivePath string) (BackupInventory, error) {
 			strings.Count(name, "/") == 2 &&
 			strings.HasSuffix(name, ".ts") {
 			pluginName := strings.TrimSuffix(path.Base(name), ".ts")
-			if pluginName != "" {
+			if _, supported := pluginspec.Find(pluginName); supported {
 				plugins[pluginName] = struct{}{}
 			}
 		}

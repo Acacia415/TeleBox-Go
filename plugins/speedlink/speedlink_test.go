@@ -1,7 +1,11 @@
 package speedlink
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,5 +67,39 @@ func TestRedactHost(t *testing.T) {
 	}
 	if got := redactHost("node.example.com"); got != "***.example.com" {
 		t.Fatalf("hostname redaction = %q", got)
+	}
+}
+
+func TestExtractSpeedtestArchive(t *testing.T) {
+	var document bytes.Buffer
+	compressed := gzip.NewWriter(&document)
+	archive := tar.NewWriter(compressed)
+	content := []byte("#!/bin/sh\nexit 0\n")
+	if err := archive.WriteHeader(&tar.Header{
+		Name: "speedtest",
+		Mode: 0o755,
+		Size: int64(len(content)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "speedtest")
+	if err := extractSpeedtestArchive(document.Bytes(), target); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("extracted = %q", got)
 	}
 }

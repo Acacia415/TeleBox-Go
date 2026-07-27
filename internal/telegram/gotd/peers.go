@@ -86,9 +86,13 @@ func (c *Client) ResolveChat(ctx context.Context, chatID int64) (teleboxtelegram
 
 	switch value := resolved.(type) {
 	case gotdpeers.Chat:
-		return portableBasicChat(value.Raw(), chatID), nil
+		result := portableBasicChat(value.Raw(), chatID)
+		c.fillBasicChatDetails(ctx, value, &result)
+		return result, nil
 	case gotdpeers.Channel:
-		return portableChannel(value.Raw(), chatID), nil
+		result := portableChannel(value.Raw(), chatID)
+		c.fillChannelDetails(ctx, value, &result)
+		return result, nil
 	default:
 		return teleboxtelegram.Chat{}, fmt.Errorf("peer %d is not a group or channel", chatID)
 	}
@@ -115,12 +119,86 @@ func (c *Client) ResolveChatTarget(
 	c.mu.Unlock()
 	switch value := resolved.(type) {
 	case gotdpeers.Chat:
-		return portableBasicChat(value.Raw(), chatID), nil
+		result := portableBasicChat(value.Raw(), chatID)
+		c.fillBasicChatDetails(ctx, value, &result)
+		return result, nil
 	case gotdpeers.Channel:
-		return portableChannel(value.Raw(), chatID), nil
+		result := portableChannel(value.Raw(), chatID)
+		c.fillChannelDetails(ctx, value, &result)
+		return result, nil
 	default:
 		return teleboxtelegram.Chat{}, fmt.Errorf("peer %q is not a group or channel", target)
 	}
+}
+
+func (c *Client) fillChannelDetails(
+	ctx context.Context,
+	channel gotdpeers.Channel,
+	result *teleboxtelegram.Chat,
+) {
+	full, err := c.raw.API().ChannelsGetFullChannel(ctx, channel.InputChannel())
+	if err != nil {
+		return
+	}
+	details, ok := full.FullChat.(*tg.ChannelFull)
+	if !ok {
+		return
+	}
+	result.Description = details.About
+	if count, ok := details.GetParticipantsCount(); ok {
+		result.MemberCount = count
+	}
+	if invite, ok := details.GetExportedInvite(); ok {
+		result.InviteLink = exportedInviteLink(invite)
+	}
+	linkedID, ok := details.GetLinkedChatID()
+	if !ok || linkedID == 0 {
+		return
+	}
+	for _, item := range full.Chats {
+		switch value := item.(type) {
+		case *tg.Chat:
+			if value.ID == linkedID {
+				var id constant.TDLibPeerID
+				id.Chat(linkedID)
+				result.LinkedChatID = int64(id)
+				return
+			}
+		case *tg.Channel:
+			if value.ID == linkedID {
+				var id constant.TDLibPeerID
+				id.Channel(linkedID)
+				result.LinkedChatID = int64(id)
+				return
+			}
+		}
+	}
+}
+
+func (c *Client) fillBasicChatDetails(
+	ctx context.Context,
+	chat gotdpeers.Chat,
+	result *teleboxtelegram.Chat,
+) {
+	full, err := c.raw.API().MessagesGetFullChat(ctx, chat.Raw().ID)
+	if err != nil {
+		return
+	}
+	details, ok := full.FullChat.(*tg.ChatFull)
+	if !ok {
+		return
+	}
+	result.Description = details.About
+	if invite, ok := details.GetExportedInvite(); ok {
+		result.InviteLink = exportedInviteLink(invite)
+	}
+}
+
+func exportedInviteLink(invite tg.ExportedChatInviteClass) string {
+	if value, ok := invite.(*tg.ChatInviteExported); ok && !value.Revoked {
+		return value.Link
+	}
+	return ""
 }
 
 func portableBasicChat(raw *tg.Chat, chatID int64) teleboxtelegram.Chat {
