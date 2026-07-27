@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -108,16 +109,94 @@ func supports(selected provider, requested feature, compat provider) bool {
 	case featureChat:
 		return true
 	case featureSearch:
-		return true
+		return selected == providerThirdParty || effective == providerGemini
 	case featureImage:
 		return effective == providerGemini ||
-			effective == providerOpenAI ||
-			effective == providerGrok
+			effective == providerOpenAI
 	case featureTTS:
 		return effective == providerGemini || effective == providerOpenAI
 	default:
 		return false
 	}
+}
+
+func (p *Plugin) providerCandidates(
+	ctx context.Context,
+	requested feature,
+) []provider {
+	type scoredProvider struct {
+		value provider
+		score int
+		order int
+	}
+	scores := map[provider]map[feature]int{
+		providerGemini: {
+			featureChat: 9, featureSearch: 10, featureImage: 8, featureTTS: 7,
+		},
+		providerOpenAI: {
+			featureChat: 10, featureSearch: 6, featureImage: 9, featureTTS: 9,
+		},
+		providerClaude: {
+			featureChat: 10, featureSearch: 7, featureImage: 8, featureTTS: 5,
+		},
+		providerDeepSeek: {
+			featureChat: 8, featureSearch: 6, featureImage: 6, featureTTS: 5,
+		},
+		providerGrok: {
+			featureChat: 7, featureSearch: 6, featureImage: 5, featureTTS: 4,
+		},
+		providerThirdParty: {
+			featureChat: 8, featureSearch: 7, featureImage: 7, featureTTS: 7,
+		},
+	}
+	active := p.currentProvider(ctx)
+	available := make([]scoredProvider, 0, len(providers))
+	for order, candidate := range providers {
+		if strings.TrimSpace(p.read(ctx, "key."+string(candidate), "")) == "" {
+			continue
+		}
+		compat := candidate
+		if candidate == providerThirdParty {
+			compat = p.compatProvider(ctx)
+		}
+		if !supports(candidate, requested, compat) {
+			continue
+		}
+		if _, err := p.baseURL(ctx, candidate); err != nil {
+			continue
+		}
+		if _, err := p.model(ctx, candidate, requested); err != nil {
+			continue
+		}
+		score := scores[candidate][requested]
+		if candidate == providerThirdParty {
+			if compatScore := scores[compat][requested]; compatScore > 0 {
+				score = compatScore
+			}
+		}
+		available = append(available, scoredProvider{
+			value: candidate,
+			score: score,
+			order: order,
+		})
+	}
+	sort.SliceStable(available, func(i, j int) bool {
+		if available[i].value == active {
+			return true
+		}
+		if available[j].value == active {
+			return false
+		}
+		if available[i].score == available[j].score {
+			return available[i].order < available[j].order
+		}
+		return available[i].score > available[j].score
+	})
+	result := make([]provider, 0, len(available))
+	for _, item := range available {
+		result = append(result, item.value)
+	}
+	return result
 }
 
 func (p *Plugin) read(ctx context.Context, key, defaultValue string) string {

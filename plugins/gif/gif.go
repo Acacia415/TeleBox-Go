@@ -44,7 +44,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "gif",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "将 GIF 或短视频自适应压缩为 Telegram 视频贴纸",
 	}
 }
@@ -53,8 +53,12 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "gif",
 		Description: "将回复的 GIF 或视频转换为贴纸",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"gif（回复 GIF 或视频）",
+			"gif clear",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 

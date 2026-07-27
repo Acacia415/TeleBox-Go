@@ -236,7 +236,13 @@ func safeDestinationPath(root, relative string) (string, error) {
 }
 
 func assetSelectors(plugins []string) []string {
-	selected := make(map[string]struct{})
+	selected := map[string]struct{}{
+		// Alias is an original core feature rather than a business plugin, so
+		// it does not appear in the installed plugin list in config.json.
+		"alias/": {},
+		"sudo/":  {},
+		"sure/":  {},
+	}
 	for _, plugin := range plugins {
 		plugin = strings.ToLower(strings.TrimSpace(plugin))
 		if plugin == "" {
@@ -255,7 +261,6 @@ var pluginAssetAliases = map[string][]string{
 	"bulk_delete":     {"bd/"},
 	"cezi":            {"cezi_config.db"},
 	"gif":             {"gif_converter/"},
-	"music_bot":       {"music_cache/", "music_gemini_config.db"},
 	"telegram-backup": {"telegram-backup/"},
 	"yt-dlp":          {"ytdlp/", "ytdlp_gemini_config.db"},
 }

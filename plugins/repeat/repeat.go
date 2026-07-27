@@ -27,7 +27,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "re",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "复读回复的消息",
 	}
 }
@@ -36,6 +36,7 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "re",
 		Description: "复读回复消息，可指定消息数和次数",
+		Usage:       []string{"re [消息数] [复读次数]（回复消息）"},
 		OwnerOnly:   true,
 		Handler:     p.handle,
 	}}

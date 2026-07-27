@@ -40,13 +40,19 @@ type songInfo struct {
 
 type Plugin struct {
 	services service.Container
+	assetDir string
 	workDir  string
 	mu       sync.Mutex
 }
 
 func New(services service.Container) *Plugin {
+	assetDir := filepath.Join(services.AssetsDir, "ytdlp")
+	if services.AssetsDir == "" {
+		assetDir = filepath.Join(os.TempDir(), "telebox-go-ytdlp-assets")
+	}
 	return &Plugin{
 		services: services,
+		assetDir: assetDir,
 		workDir:  filepath.Join(os.TempDir(), "telebox-go-ytdlp"),
 	}
 }
@@ -54,7 +60,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "yt-dlp",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "使用 yt-dlp 搜索并下载 YouTube 音乐",
 	}
 }
@@ -63,13 +69,34 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "yt",
 		Description: "搜索并下载 YouTube 音乐",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"yt <关键词>",
+			"yt <歌名> - <歌手>",
+			"yt update",
+			"yt apikey <密钥|clear>",
+			"yt model <模型名>",
+			"yt baseurl <地址|clear>",
+			"yt proxy <地址|clear>",
+			"yt cookies <文件路径|clear>",
+			"yt runtime <Deno路径|auto|none>",
+			"yt binary <路径|auto>",
+			"yt setup",
+			"yt doctor",
+			"yt clear",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 
-func (p *Plugin) Start(context.Context) error {
-	return os.MkdirAll(p.workDir, 0o700)
+func (p *Plugin) Start(ctx context.Context) error {
+	if err := os.MkdirAll(p.workDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(p.assetDir, 0o700); err != nil {
+		return err
+	}
+	return p.migrateLegacyConfig(ctx)
 }
 
 func (p *Plugin) Stop(context.Context) error { return nil }
@@ -89,6 +116,16 @@ func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 		return p.configure(ctx, request, "model", false)
 	case "binary":
 		return p.configureBinary(ctx, request)
+	case "proxy":
+		return p.configureProxy(ctx, request)
+	case "cookies":
+		return p.configureCookies(ctx, request)
+	case "runtime":
+		return p.configureRuntime(ctx, request)
+	case "setup":
+		return p.setup(ctx, request)
+	case "doctor":
+		return p.doctor(ctx, request)
 	case "clear":
 		return p.clear(ctx, request)
 	}
@@ -105,7 +142,13 @@ func (p *Plugin) download(
 
 	executable, err := p.findExecutable(ctx)
 	if err != nil {
-		return p.respond(ctx, request, installHint(request.Prefix))
+		if err := p.respond(ctx, request, "⏳ 首次使用，正在安装 yt-dlp…"); err != nil {
+			return err
+		}
+		executable, err = p.ensureYTDLP(ctx, false)
+		if err != nil {
+			return p.respond(ctx, request, "❌ 自动安装 yt-dlp 失败："+shortError(err))
+		}
 	}
 	if _, err := p.services.Tools.LookPath("ffmpeg"); err != nil {
 		return p.respond(ctx, request, "❌ 未找到 FFmpeg；yt-dlp 音频转换需要 ffmpeg")
@@ -165,7 +208,7 @@ func (p *Plugin) download(
 	outputTemplate := filepath.Join(jobDir, "%(id)s.%(ext)s")
 	result, runErr := p.services.Tools.Run(ctx, toolrunner.Command{
 		Name: executable,
-		Args: []string{
+		Args: append(p.ytDLPOptions(ctx),
 			video.URL,
 			"--no-playlist",
 			"--no-warnings",
@@ -178,7 +221,7 @@ func (p *Plugin) download(
 			"--max-filesize", "512M",
 			"-o", outputTemplate,
 			"--print", "after_move:filepath",
-		},
+		),
 		Directory: jobDir,
 		Timeout:   10 * time.Minute,
 		MaxOutput: 256 << 10,
@@ -233,13 +276,13 @@ func (p *Plugin) videoInfo(
 ) (songInfo, error) {
 	result, err := p.services.Tools.Run(ctx, toolrunner.Command{
 		Name: executable,
-		Args: []string{
-			"ytsearch1:" + query,
+		Args: append(p.ytDLPOptions(ctx),
+			"ytsearch1:"+query,
 			"--no-playlist",
 			"--no-download",
 			"--no-warnings",
 			"--print", "%(title)s\t%(uploader)s\t%(duration)s\t%(webpage_url)s",
-		},
+		),
 		Timeout:   2 * time.Minute,
 		MaxOutput: 128 << 10,
 	})
@@ -286,7 +329,9 @@ func (p *Plugin) identify(
 		}},
 		"generationConfig": map[string]any{
 			"responseMimeType": "application/json",
-			"temperature":      0.2,
+			"temperature":      p.readFloat(ctx, "temperature", 0.2),
+			"topP":             p.readFloat(ctx, "top_p", 0.8),
+			"topK":             p.readInt(ctx, "top_k", 40),
 		},
 	})
 	if err != nil {
@@ -335,7 +380,10 @@ func (p *Plugin) update(ctx context.Context, request command.Request) error {
 	defer p.mu.Unlock()
 	executable, err := p.findExecutable(ctx)
 	if err != nil {
-		return p.respond(ctx, request, installHint(request.Prefix))
+		executable, err = p.ensureYTDLP(ctx, false)
+		if err != nil {
+			return p.respond(ctx, request, "❌ 自动安装 yt-dlp 失败："+shortError(err))
+		}
 	}
 	if err := p.respond(ctx, request, "⏳ 更新 yt-dlp…"); err != nil {
 		return err
@@ -495,6 +543,24 @@ func (p *Plugin) write(ctx context.Context, key, value string) error {
 	return p.services.Storage.Put(ctx, "yt-dlp", key, []byte(value))
 }
 
+func (p *Plugin) readFloat(ctx context.Context, key string, defaultValue float64) float64 {
+	value, _ := p.read(ctx, key)
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return defaultValue
+	}
+	return parsed
+}
+
+func (p *Plugin) readInt(ctx context.Context, key string, defaultValue int) int {
+	value, _ := p.read(ctx, key)
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+	return parsed
+}
+
 func (p *Plugin) respond(ctx context.Context, request command.Request, text string) error {
 	if request.Message.Outgoing {
 		_, err := p.services.Telegram.EditText(
@@ -651,6 +717,11 @@ func helpText(prefix string) string {
 		prefix + "yt model <模型名>\n" +
 		prefix + "yt baseurl <地址|clear>\n\n" +
 		"工具配置：\n" +
+		prefix + "yt setup  自动安装 yt-dlp\n" +
+		prefix + "yt doctor  检查 yt-dlp、FFmpeg、Deno 与登录配置\n" +
+		prefix + "yt proxy <地址|clear>\n" +
+		prefix + "yt cookies <文件路径|clear>\n" +
+		prefix + "yt runtime <Deno路径|auto|none>\n" +
 		prefix + "yt binary <路径|auto>\n" +
 		prefix + "yt clear\n\n依赖：持续维护的 yt-dlp 与 FFmpeg"
 }

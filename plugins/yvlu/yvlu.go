@@ -49,7 +49,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "yvlu",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "纯 Go 本地生成 Telegram 消息语录贴纸",
 	}
 }
@@ -58,8 +58,16 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "yvlu",
 		Description: "把回复的消息生成语录贴纸",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"yvlu [消息数]（回复消息）",
+			"yvlu r [消息数]（包含回复引用）",
+			"yvlu f <伪造消息>",
+			"yvlu fr <伪造消息>（包含回复引用）",
+			"yvlu u <用户ID|用户名> [消息数]",
+			"yvlu ur <用户ID|用户名> [消息数]",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 
@@ -226,10 +234,13 @@ func (p *Plugin) quoteItem(
 	fakeUser telegram.User,
 ) (quoteItem, error) {
 	user := fakeUser
-	if user.ID == 0 && message.SenderID != 0 {
+	senderID := message.SenderID
+	if user.ID == 0 && message.ForwardSenderID != 0 {
+		senderID = message.ForwardSenderID
+	}
+	if user.ID == 0 && senderID != 0 {
 		resolved, err := p.services.Telegram.ResolveUser(
-			ctx,
-			strconv.FormatInt(message.SenderID, 10),
+			ctx, strconv.FormatInt(senderID, 10),
 		)
 		if err == nil {
 			user = resolved
@@ -237,7 +248,10 @@ func (p *Plugin) quoteItem(
 	}
 	sender := strings.TrimSpace(user.FirstName + " " + user.LastName)
 	if sender == "" {
-		sender = firstNonEmpty(user.Username, strconv.FormatInt(message.SenderID, 10))
+		sender = message.ForwardName
+	}
+	if sender == "" {
+		sender = firstNonEmpty(user.Username, strconv.FormatInt(senderID, 10))
 	}
 	item := quoteItem{
 		Sender: sender,
@@ -253,7 +267,9 @@ func (p *Plugin) quoteItem(
 			item.Avatar, _, _ = image.Decode(bytes.NewReader(avatar.Bytes()))
 		}
 	}
-	if parsed.IncludeReply && message.ReplyToID > 0 {
+	if parsed.IncludeReply && message.ReplyQuote != "" {
+		item.Reply = message.ReplyQuote
+	} else if parsed.IncludeReply && message.ReplyToID > 0 {
 		replied, err := p.services.Telegram.GetMessages(
 			ctx,
 			chatID,

@@ -29,3 +29,19 @@ func TestPortableUser(t *testing.T) {
 		t.Fatalf("portableUser() = %+v", got)
 	}
 }
+
+func TestExportedInviteLink(t *testing.T) {
+	t.Parallel()
+
+	if got := exportedInviteLink(&tg.ChatInviteExported{
+		Link: "https://t.me/+secret",
+	}); got != "https://t.me/+secret" {
+		t.Fatalf("invite link = %q", got)
+	}
+	if got := exportedInviteLink(&tg.ChatInviteExported{
+		Link:    "https://t.me/+revoked",
+		Revoked: true,
+	}); got != "" {
+		t.Fatalf("revoked invite leaked: %q", got)
+	}
+}

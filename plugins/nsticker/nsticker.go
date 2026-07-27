@@ -28,21 +28,25 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "nsticker",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "将回复的静态、动态或视频贴纸收藏到自己的贴纸包",
 	}
 }
 
 func (p *Plugin) Commands() []command.Definition {
-	definition := func(name string) command.Definition {
-		return command.Definition{
-			Name:        name,
-			Description: "收藏回复的贴纸",
-			OwnerOnly:   true,
-			Handler:     p.handle,
-		}
-	}
-	return []command.Definition{definition("s"), definition("sticker")}
+	return []command.Definition{{
+		Name:        "sticker",
+		Aliases:     []string{"s"},
+		Description: "收藏回复的静态、动态或视频贴纸",
+		Usage: []string{
+			"s（回复贴纸）",
+			"s <已有包名>",
+			"s to <包名>（回复贴纸）",
+			"s cancel",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
+	}}
 }
 
 func (p *Plugin) Start(context.Context) error { return nil }

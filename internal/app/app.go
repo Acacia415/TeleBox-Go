@@ -16,6 +16,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/config"
 	"github.com/Acacia415/TeleBox-Go/internal/dispatch"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
+	"github.com/Acacia415/TeleBox-Go/internal/legacyconfig"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/pluginmanager"
 	"github.com/Acacia415/TeleBox-Go/internal/pluginmarket"
@@ -44,6 +45,7 @@ func New(
 	ctx context.Context,
 	cfg config.Config,
 	logger *slog.Logger,
+	logLevel service.LogLevelController,
 	client telegram.Client,
 	restart func(),
 ) (*App, error) {
@@ -88,14 +90,20 @@ func New(
 		return nil, fmt.Errorf("create command pool: %w", err)
 	}
 	services := service.Container{
-		Logger:    logger,
-		Telegram:  client,
-		Storage:   store,
-		Tools:     tools,
-		Scheduler: jobScheduler,
-		AssetsDir: cfg.Storage.AssetsPath,
-		HTTP:      httpClient,
-		Restart:   restart,
+		Logger:      logger,
+		Telegram:    client,
+		Storage:     store,
+		Tools:       tools,
+		Scheduler:   jobScheduler,
+		AssetsDir:   cfg.Storage.AssetsPath,
+		ConfigPath:  cfg.SourcePath,
+		StoragePath: cfg.Storage.Path,
+		PluginsDir:  cfg.Plugins.Directory,
+		SessionPath: cfg.Telegram.SessionFile,
+		HTTP:        httpClient,
+		LogLevel:    logLevel,
+		LogPath:     cfg.Logging.Path,
+		Restart:     restart,
 	}
 	market, err := pluginmarket.New(pluginmarket.Config{
 		Directory:       cfg.Plugins.Directory,
@@ -228,6 +236,90 @@ func (a *App) restoreCoreSettings(ctx context.Context) {
 	case errors.Is(err, storage.ErrNotFound):
 	default:
 		a.logger.Error("load persisted command prefixes", "error", err)
+	}
+	a.restoreCommandAliases(ctx)
+	a.restoreLogLevel(ctx)
+}
+
+func (a *App) restoreCommandAliases(ctx context.Context) {
+	const storageKey = "command_aliases"
+
+	encoded, err := a.services.Storage.Get(ctx, "core", storageKey)
+	switch {
+	case err == nil:
+		var aliases map[string]string
+		if decodeErr := json.Unmarshal(encoded, &aliases); decodeErr != nil {
+			a.logger.Error("decode persisted command aliases", "error", decodeErr)
+			return
+		}
+		if setErr := a.router.SetUserAliases(aliases); setErr != nil {
+			a.logger.Error("apply persisted command aliases", "error", setErr)
+		}
+		return
+	case !errors.Is(err, storage.ErrNotFound):
+		a.logger.Error("load persisted command aliases", "error", err)
+		return
+	}
+
+	aliases, err := legacyconfig.ReadAliases(
+		filepath.Join(a.config.Storage.AssetsPath, "alias", "alias.db"),
+	)
+	if err != nil {
+		a.logger.Error("read legacy command aliases", "error", err)
+		return
+	}
+	if len(aliases) == 0 {
+		return
+	}
+	if err := a.router.SetUserAliases(aliases); err != nil {
+		a.logger.Error("apply legacy command aliases", "error", err)
+		return
+	}
+	encoded, err = json.Marshal(a.router.UserAliases())
+	if err != nil {
+		a.logger.Error("encode migrated command aliases", "error", err)
+		return
+	}
+	if err := a.services.Storage.Put(ctx, "core", storageKey, encoded); err != nil {
+		a.logger.Error("persist migrated command aliases", "error", err)
+		return
+	}
+	a.logger.Info("migrated legacy command aliases", "count", len(aliases))
+}
+
+func (a *App) restoreLogLevel(ctx context.Context) {
+	if a.services.LogLevel == nil {
+		return
+	}
+	encoded, err := a.services.Storage.Get(ctx, "core", "log_level")
+	if err != nil {
+		if !errors.Is(err, storage.ErrNotFound) {
+			a.logger.Error("load persisted log level", "error", err)
+		}
+		return
+	}
+	level, err := parseLogLevel(string(encoded))
+	if err != nil {
+		a.logger.Error("decode persisted log level", "error", err)
+		return
+	}
+	a.services.LogLevel.Set(level)
+}
+
+func parseLogLevel(value string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warning", "warn":
+		return slog.LevelWarn, nil
+	case "error", "err":
+		return slog.LevelError, nil
+	case "silent", "off":
+		return slog.Level(100), nil
+	default:
+		return 0, fmt.Errorf("unsupported log level %q", value)
 	}
 }
 

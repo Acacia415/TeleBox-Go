@@ -137,7 +137,22 @@ func (h *Host) Handle(
 			return nil, err
 		}
 		result, err := h.services.Tools.Run(ctx, request.Command)
-		return result, translateError(err)
+		response := ToolResponse{Result: result}
+		if translated := translateError(err); translated != nil {
+			var remote *pluginrpc.RemoteError
+			if errors.As(translated, &remote) {
+				response.Error = &BridgeError{
+					Code:    remote.Code,
+					Message: remote.Message,
+				}
+			} else {
+				response.Error = &BridgeError{
+					Code:    "remote_error",
+					Message: translated.Error(),
+				}
+			}
+		}
+		return response, nil
 	case MethodTelegramSendText:
 		request, err := decode[TextRequest](raw)
 		if err != nil {

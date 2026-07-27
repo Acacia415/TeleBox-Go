@@ -64,6 +64,7 @@ type loadedConfig struct {
 
 type Plugin struct {
 	services service.Container
+	assetDir string
 	workDir  string
 
 	mu         sync.Mutex
@@ -72,8 +73,13 @@ type Plugin struct {
 }
 
 func New(services service.Container) *Plugin {
+	assetDir := filepath.Join(services.AssetsDir, "eat")
+	if services.AssetsDir == "" {
+		assetDir = filepath.Join(os.TempDir(), "telebox-go-eat-assets")
+	}
 	return &Plugin{
 		services:   services,
+		assetDir:   assetDir,
 		workDir:    filepath.Join(os.TempDir(), "telebox-go-eat"),
 		assetCache: make(map[string][]byte),
 	}
@@ -82,7 +88,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "将用户头像或回复图片合成到静态表情模板",
 	}
 }
@@ -92,7 +98,12 @@ func (p *Plugin) Commands() []command.Definition {
 		{
 			Name:        "eat",
 			Description: "使用回复用户的头像生成表情",
-			OwnerOnly:   true,
+			Usage: []string{
+				"eat [模板名]（回复用户）",
+				"eat set [配置地址]",
+				"eat clear",
+			},
+			OwnerOnly: true,
 			Handler: func(ctx context.Context, request command.Request) error {
 				return p.handle(ctx, request, false)
 			},
@@ -100,7 +111,12 @@ func (p *Plugin) Commands() []command.Definition {
 		{
 			Name:        "eat2",
 			Description: "使用回复消息中的图片生成表情",
-			OwnerOnly:   true,
+			Usage: []string{
+				"eat2 [模板名]（回复图片）",
+				"eat2 set [配置地址]",
+				"eat2 clear",
+			},
+			OwnerOnly: true,
 			Handler: func(ctx context.Context, request command.Request) error {
 				return p.handle(ctx, request, true)
 			},
@@ -109,7 +125,10 @@ func (p *Plugin) Commands() []command.Definition {
 }
 
 func (p *Plugin) Start(context.Context) error {
-	return os.MkdirAll(p.workDir, 0o700)
+	if err := os.MkdirAll(p.workDir, 0o700); err != nil {
+		return err
+	}
+	return os.MkdirAll(p.assetDir, 0o700)
 }
 
 func (p *Plugin) Stop(context.Context) error { return nil }
@@ -200,14 +219,20 @@ func (p *Plugin) ensureConfig(ctx context.Context) error {
 
 func (p *Plugin) loadConfig(ctx context.Context, configURL string) (loadedConfig, error) {
 	response, err := p.services.HTTP.Do(ctx, httpclient.Request{URL: configURL})
-	if err != nil {
-		return loadedConfig{}, err
-	}
-	if response.StatusCode != http.StatusOK {
-		return loadedConfig{}, fmt.Errorf("配置源 HTTP %d", response.StatusCode)
+	body := response.Body
+	if err != nil || response.StatusCode != http.StatusOK {
+		local, localErr := os.ReadFile(filepath.Join(p.assetDir, "config.json"))
+		if localErr != nil {
+			if err != nil {
+				return loadedConfig{}, err
+			}
+			return loadedConfig{}, fmt.Errorf("配置源 HTTP %d", response.StatusCode)
+		}
+		body = local
+		p.services.Logger.Info("using migrated local eat config")
 	}
 	var document configDocument
-	if err := json.Unmarshal(response.Body, &document); err != nil {
+	if err := json.Unmarshal(body, &document); err != nil {
 		return loadedConfig{}, fmt.Errorf("解析配置：%w", err)
 	}
 	if len(document.Resources) == 0 {
@@ -412,6 +437,11 @@ func (p *Plugin) applyRole(
 }
 
 func (p *Plugin) asset(ctx context.Context, value string) ([]byte, error) {
+	if local := p.localAsset(value); local != "" {
+		if data, err := os.ReadFile(local); err == nil {
+			return data, nil
+		}
+	}
 	assetURL, err := resolveAssetURL(p.cfg.AssetBase, value)
 	if err != nil {
 		return nil, err
@@ -434,6 +464,32 @@ func (p *Plugin) asset(ctx context.Context, value string) ([]byte, error) {
 	}
 	p.assetCache[assetURL] = append([]byte(nil), response.Body...)
 	return response.Body, nil
+}
+
+func (p *Plugin) localAsset(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	name := filepath.Base(filepath.FromSlash(parsed.Path))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	target := filepath.Join(p.assetDir, name)
+	root, err := filepath.Abs(p.assetDir)
+	if err != nil {
+		return ""
+	}
+	target, err = filepath.Abs(target)
+	if err != nil {
+		return ""
+	}
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return target
 }
 
 func (p *Plugin) listText(prefix string) string {

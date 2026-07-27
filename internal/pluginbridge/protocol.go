@@ -77,6 +77,16 @@ type ToolRequest struct {
 	Command toolrunner.Command `json:"command"`
 }
 
+type ToolResponse struct {
+	Result toolrunner.Result `json:"result"`
+	Error  *BridgeError      `json:"error,omitempty"`
+}
+
+type BridgeError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type TextRequest struct {
 	ChatID    int64  `json:"chat_id"`
 	MessageID int    `json:"message_id,omitempty"`

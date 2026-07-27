@@ -145,6 +145,8 @@ func (p *Plugin) migrateLegacy(ctx context.Context) error {
 		"ai_tts_active_prompt":         "prompt.active.tts",
 		"ai_telegraph_enabled":         "telegraph",
 		"ai_telegraph_limit":           "telegraph.limit",
+		"ai_telegraph_token":           "telegraph.token",
+		"ai_telegraph_posts":           "telegraph.posts",
 		"ai_collapsible_quote_enabled": "collapse",
 	}
 	for oldKey, newKey := range simpleKeys {

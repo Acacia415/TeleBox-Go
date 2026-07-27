@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,7 +37,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "ai",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "调用 Gemini、OpenAI、Claude、DeepSeek、Grok 与第三方模型",
 	}
 }
@@ -45,8 +46,30 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "ai",
 		Description: "模型对话、搜索、图片、语音与服务商管理",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"ai <问题>（可回复文本、图片、音频或文档）",
+			"ai search <问题>",
+			"ai image <提示词>",
+			"ai tts <文本>",
+			"ai audio <问题>",
+			"ai searchaudio <问题>",
+			"ai settings|status",
+			"ai select <gemini|openai|claude|deepseek|grok|thirdparty>",
+			"ai apikey <服务商> <密钥|clear>",
+			"ai baseurl <服务商> <URL|clear>",
+			"ai thirdparty compat <兼容协议>",
+			"ai model list|set <用途> <模型>|auto",
+			"ai chatmodel|searchmodel|imagemodel|ttsmodel [模型]",
+			"ai ttsvoice [音色]",
+			"ai maxtokens [数量]",
+			"ai context <on|off|show|clear>",
+			"ai prompt <add|del|list|set|show> ...",
+			"ai collapse [on|off]",
+			"ai telegraph <on|off|limit <字符数>|list|del <ID|all>>",
+			"ai config default",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 
@@ -153,11 +176,15 @@ func (p *Plugin) handleChat(
 	if search {
 		requested = featureSearch
 	}
+	var history []chatMessage
+	if !search {
+		history = p.history(ctx, request.Message.ChatID)
+	}
 	result, cfg, err := p.generateText(
 		ctx,
 		requested,
 		prompt,
-		p.history(ctx, request.Message.ChatID),
+		history,
 		image,
 	)
 	if err != nil {
@@ -180,11 +207,13 @@ func (p *Plugin) handleChat(
 		}
 		speech, speechCfg, speechErr := p.generateSpeech(ctx, result.Text)
 		if speechErr != nil {
+			text := formatAnswer(display, result.Text, cfg, search) +
+				"\n\n⚠️ 语音生成失败：" + friendlyError(speechErr)
+			text = p.publishLongAnswer(ctx, display, text)
 			return p.finishText(
 				ctx,
 				request,
-				formatAnswer(display, result.Text, cfg, search)+
-					"\n\n⚠️ 语音生成失败："+friendlyError(speechErr),
+				text,
 				reply.ID,
 			)
 		}
@@ -199,12 +228,90 @@ func (p *Plugin) handleChat(
 			reply.ID,
 		)
 	}
+	plainAnswer := formatAnswer(display, result.Text, cfg, search)
+	answer := p.publishLongAnswer(
+		ctx,
+		display,
+		plainAnswer,
+	)
+	if answer == plainAnswer && len([]rune(answer)) <= 3500 {
+		return p.finishAnswerHTML(
+			ctx,
+			request,
+			display,
+			result.Text,
+			cfg,
+			search,
+			reply.ID,
+		)
+	}
 	return p.finishText(
 		ctx,
 		request,
-		formatAnswer(display, result.Text, cfg, search),
+		answer,
 		reply.ID,
 	)
+}
+
+func (p *Plugin) finishAnswerHTML(
+	ctx context.Context,
+	request command.Request,
+	question string,
+	answer string,
+	cfg requestConfig,
+	search bool,
+	replyTo int,
+) error {
+	quoteTag := "<blockquote>"
+	if p.read(ctx, "collapse", "off") == "on" {
+		quoteTag = "<blockquote expandable>"
+	}
+	var text strings.Builder
+	if strings.TrimSpace(question) != "" {
+		text.WriteString("<b>Q:</b>\n")
+		text.WriteString(quoteTag)
+		text.WriteString(html.EscapeString(strings.TrimSpace(question)))
+		text.WriteString("</blockquote>\n\n")
+	}
+	text.WriteString("<b>A:</b>\n")
+	text.WriteString(quoteTag)
+	text.WriteString(html.EscapeString(strings.TrimSpace(answer)))
+	text.WriteString("</blockquote>\n\n<i>— ")
+	text.WriteString(html.EscapeString(providerLabel(cfg)))
+	if search {
+		text.WriteString(" · Search")
+	}
+	text.WriteString("</i>")
+	if request.Message.Outgoing && replyTo == 0 {
+		_, err := telegram.EditHTML(
+			ctx,
+			p.services.Telegram,
+			request.Message.ChatID,
+			request.Message.ID,
+			text.String(),
+		)
+		return err
+	}
+	if replyTo == 0 {
+		replyTo = request.Message.ID
+	}
+	if _, err := telegram.ReplyHTML(
+		ctx,
+		p.services.Telegram,
+		request.Message.ChatID,
+		replyTo,
+		text.String(),
+	); err != nil {
+		return err
+	}
+	if request.Message.Outgoing {
+		return p.services.Telegram.DeleteMessages(
+			ctx,
+			request.Message.ChatID,
+			[]int{request.Message.ID},
+		)
+	}
+	return nil
 }
 
 func (p *Plugin) handleImage(

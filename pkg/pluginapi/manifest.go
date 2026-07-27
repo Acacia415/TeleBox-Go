@@ -36,6 +36,8 @@ type Command struct {
 	Name        string   `json:"name"`
 	Aliases     []string `json:"aliases,omitempty"`
 	Description string   `json:"description,omitempty"`
+	Usage       []string `json:"usage,omitempty"`
+	HelpHTML    string   `json:"help_html,omitempty"`
 	OwnerOnly   bool     `json:"owner_only,omitempty"`
 }
 

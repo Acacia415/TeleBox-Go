@@ -9,10 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
+	"github.com/Acacia415/TeleBox-Go/internal/storage"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
 )
 
@@ -51,7 +53,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "trace",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "按用户或关键词自动发送 Telegram reaction",
 	}
 }
@@ -60,15 +62,48 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "trace",
 		Description: "管理用户和关键词 reaction 追踪",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"trace [reaction...]（回复目标消息；留空取消）",
+			"trace kw add <关键词> <reaction...>",
+			"trace kw del <关键词>",
+			"trace status",
+			"trace clean",
+			"trace reset",
+			"trace log <true|false>",
+			"trace big <true|false>",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 
 func (p *Plugin) Start(ctx context.Context) error {
 	raw, err := p.services.Storage.Get(ctx, "trace", "state")
-	if err != nil {
+	if errors.Is(err, storage.ErrNotFound) {
+		state, imported, migrateErr := p.loadLegacyState()
+		if migrateErr != nil {
+			return migrateErr
+		}
+		if !imported {
+			return nil
+		}
+		normalizeState(&state)
+		p.mu.Lock()
+		p.state = state
+		err = p.persistLocked(ctx)
+		p.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		p.services.Logger.Info(
+			"migrated legacy trace state",
+			"users", len(state.Users),
+			"keywords", len(state.Keywords),
+		)
 		return nil
+	}
+	if err != nil {
+		return err
 	}
 	var state traceState
 	if err := json.Unmarshal(raw, &state); err != nil {
@@ -126,7 +161,7 @@ func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 	}
 	if len(request.Args) == 0 || strings.EqualFold(request.Args[0], "help") ||
 		strings.EqualFold(request.Args[0], "h") {
-		return p.respond(ctx, request, helpText(request.Prefix))
+		return p.respondPersistent(ctx, request, helpText(request.Prefix))
 	}
 	switch strings.ToLower(request.Args[0]) {
 	case "kw":
@@ -142,7 +177,7 @@ func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 	case "big":
 		return p.setConfig(ctx, request, "big")
 	default:
-		return p.respond(ctx, request, helpText(request.Prefix))
+		return p.respondPersistent(ctx, request, helpText(request.Prefix))
 	}
 }
 
@@ -302,7 +337,7 @@ func (p *Plugin) status(ctx context.Context, request command.Request) error {
 			lines = append(lines, key+" → "+reactionDisplay(state.Keywords[key]))
 		}
 	}
-	return p.respond(ctx, request, strings.Join(lines, "\n"))
+	return p.respondPersistent(ctx, request, strings.Join(lines, "\n"))
 }
 
 func (p *Plugin) clean(
@@ -323,10 +358,11 @@ func (p *Plugin) clean(
 	if err != nil {
 		return p.respond(ctx, request, "❌ 清理追踪失败："+err.Error())
 	}
-	return p.respond(
+	return p.respondAfter(
 		ctx,
 		request,
 		fmt.Sprintf("🗑️ 已清除 %d 个用户和 %d 个关键字", users, keywords),
+		10*time.Second,
 	)
 }
 
@@ -353,7 +389,12 @@ func (p *Plugin) setConfig(
 	if err != nil {
 		return p.respond(ctx, request, "❌ 保存配置失败："+err.Error())
 	}
-	return p.respond(ctx, request, fmt.Sprintf("✅ %s 已设置为 %t", name, value))
+	return p.respondAfter(
+		ctx,
+		request,
+		fmt.Sprintf("✅ %s 已设置为 %t", name, value),
+		10*time.Second,
+	)
 }
 
 func (p *Plugin) repliedUserID(
@@ -386,22 +427,70 @@ func (p *Plugin) big() bool {
 }
 
 func (p *Plugin) respond(ctx context.Context, request command.Request, text string) error {
+	return p.respondAfter(ctx, request, text, 5*time.Second)
+}
+
+func (p *Plugin) respondAfter(
+	ctx context.Context,
+	request command.Request,
+	text string,
+	delay time.Duration,
+) error {
+	sent, err := p.sendResponse(ctx, request, text)
+	if err != nil || p.keepLog() {
+		return err
+	}
+	time.AfterFunc(delay, func() {
+		deleteCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if deleteErr := p.services.Telegram.DeleteMessages(
+			deleteCtx,
+			sent.ChatID,
+			[]int{sent.MessageID},
+		); deleteErr != nil {
+			p.services.Logger.Warn(
+				"delete transient trace response",
+				"error", deleteErr,
+			)
+		}
+	})
+	return nil
+}
+
+func (p *Plugin) respondPersistent(
+	ctx context.Context,
+	request command.Request,
+	text string,
+) error {
+	_, err := p.sendResponse(ctx, request, text)
+	return err
+}
+
+func (p *Plugin) sendResponse(
+	ctx context.Context,
+	request command.Request,
+	text string,
+) (telegram.SentMessage, error) {
 	if request.Message.Outgoing {
-		_, err := p.services.Telegram.EditText(
+		return p.services.Telegram.EditText(
 			ctx,
 			request.Message.ChatID,
 			request.Message.ID,
 			text,
 		)
-		return err
 	}
-	_, err := p.services.Telegram.ReplyText(
+	return p.services.Telegram.ReplyText(
 		ctx,
 		request.Message.ChatID,
 		request.Message.ID,
 		text,
 	)
-	return err
+}
+
+func (p *Plugin) keepLog() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.state.Config.KeepLog
 }
 
 func parseReactions(text string, customIDs []int64) []telegram.Reaction {

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -28,9 +27,11 @@ type PackageManager interface {
 	Installed() ([]pluginmarket.Installed, error)
 	Search(context.Context, string) ([]pluginapi.CatalogPlugin, error)
 	Install(context.Context, string, string) (pluginmarket.InstallResult, error)
+	InstallArchive(context.Context, []byte, string) (pluginmarket.InstallResult, error)
 	Update(context.Context, string) (pluginmarket.InstallResult, error)
 	UpdateAll(context.Context) ([]pluginmarket.InstallResult, error)
 	Remove(context.Context, string) error
+	Export(string, string) (pluginmarket.Installed, error)
 	Enable(context.Context, string) error
 	Disable(context.Context, string) error
 }
@@ -48,7 +49,12 @@ type Plugin struct {
 	updater    FrameworkUpdater
 	started    time.Time
 	updateMu   sync.Mutex
+	backupMu   sync.Mutex
 	restarting atomic.Bool
+
+	accessMu   sync.RWMutex
+	sudoAccess accessState
+	sureAccess accessState
 }
 
 func New(
@@ -80,38 +86,170 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{
 		{
 			Name:        "ping",
-			Description: "检查 TeleBox 是否正在运行",
-			Handler:     p.ping,
+			Description: "测试 Telegram、主机和数据中心网络延迟",
+			Usage: []string{
+				"ping",
+				"ping <IP|域名|dc1-dc5>",
+				"ping all",
+			},
+			Handler: p.ping,
 		},
 		{
 			Name:        "help",
 			Description: "列出当前可用命令",
+			Usage:       []string{"help", "help <命令>"},
 			Handler:     p.help,
 		},
 		{
 			Name:        "status",
 			Description: "显示 TeleBox-Go 运行状态",
+			Usage:       []string{"status"},
 			Handler:     p.status,
+		},
+		{
+			Name:        "sysinfo",
+			Description: "显示主机系统、资源、磁盘和网络信息",
+			Usage:       []string{"sysinfo"},
+			Handler:     p.sysinfo,
 		},
 		{
 			Name:        "update",
 			Aliases:     []string{"upgrade"},
 			Description: "检查并更新 TeleBox-Go 框架",
+			Usage:       []string{"update", "update check", "update force|-f|--force"},
 			OwnerOnly:   true,
 			Handler:     p.updateFramework,
 		},
 		{
 			Name:        "prefix",
 			Description: "查看或修改命令前缀",
+			Usage: []string{
+				"prefix show",
+				"prefix set <前缀...>",
+				"prefix add <前缀>",
+				"prefix remove <前缀>",
+			},
+			OwnerOnly: true,
+			Handler:   p.prefix,
+		},
+		{
+			Name:        "alias",
+			Description: "查看和管理用户自定义命令别名",
+			Usage: []string{
+				"alias ls",
+				"alias set <别名...> <原命令...>",
+				"alias del <别名...>",
+			},
+			OwnerOnly: true,
+			Handler:   p.alias,
+		},
+		{
+			Name:        "exec",
+			Description: "在主机上运行 Shell 命令",
+			Usage:       []string{"exec <Shell命令>"},
 			OwnerOnly:   true,
-			Handler:     p.prefix,
+			Handler:     p.exec,
+		},
+		{
+			Name:        "loglevel",
+			Description: "查看或动态调整日志等级",
+			Usage:       []string{"loglevel", "loglevel <debug|info|warning|error|silent>"},
+			OwnerOnly:   true,
+			Handler:     p.logLevel,
+		},
+		{
+			Name:        "sendlog",
+			Aliases:     []string{"logs", "log"},
+			Description: "发送或清理 TeleBox-Go 日志文件",
+			Usage: []string{
+				"sendlog",
+				"sendlog set <对话ID|@用户名|me>",
+				"sendlog clean",
+			},
+			OwnerOnly: true,
+			Handler:   p.sendLog,
+		},
+		{
+			Name:        "bf",
+			Description: "备份 TeleBox-Go 插件、配置与运行数据",
+			Usage: []string{
+				"bf",
+				"bf all",
+				"bf set <对话ID...>",
+				"bf to <对话ID...>",
+				"bf del <对话ID|all>",
+			},
+			OwnerOnly: true,
+			Handler:   p.backup,
+		},
+		{
+			Name:        "hf",
+			Description: "从回复的 TeleBox-Go 备份文件安全恢复",
+			Usage:       []string{"hf（回复 .tar.gz 备份文件）"},
+			OwnerOnly:   true,
+			Handler:     p.restore,
+		},
+		{
+			Name:        "sudo",
+			Description: "授权指定用户在允许的对话中使用 TeleBox 命令",
+			Usage: []string{
+				"sudo add|del <用户ID|@用户名>（也可回复用户）",
+				"sudo ls",
+				"sudo chat add|del [对话ID|@用户名]",
+				"sudo chat ls",
+			},
+			OwnerOnly: true,
+			Handler:   p.sudo,
+		},
+		{
+			Name:        "sure",
+			Description: "授权指定用户发送白名单消息或受控命令",
+			Usage: []string{
+				"sure add|del <用户ID|@用户名>（也可回复用户）",
+				"sure ls",
+				"sure chat add|del [对话ID|@用户名]",
+				"sure chat ls",
+				"sure msg add <消息>",
+				"sure msg redirect <ID> [新消息]",
+				"sure msg del <ID>",
+				"sure msg ls",
+			},
+			OwnerOnly: true,
+			Handler:   p.sure,
+		},
+		{
+			Name:        "reload",
+			Description: "重新启动所有已启用业务插件",
+			Usage:       []string{"reload"},
+			OwnerOnly:   true,
+			Handler:     p.reloadPlugins,
+		},
+		{
+			Name:        "restart",
+			Aliases:     []string{"exit", "pmr"},
+			Description: "重新启动 TeleBox-Go 进程",
+			Usage:       []string{"restart", "exit", "pmr"},
+			OwnerOnly:   true,
+			Handler:     p.restartProcess,
 		},
 		{
 			Name:        "tpm",
 			Aliases:     []string{"p", "t", "plugins", "plugin"},
 			Description: "安装、更新和管理插件",
-			OwnerOnly:   true,
-			Handler:     p.plugins,
+			Usage: []string{
+				"p ls",
+				"p s [关键词]",
+				"p i <插件[@版本]|all>",
+				"p i（回复已编译的 ZIP/TAR.GZ 插件包）",
+				"p u [插件]",
+				"p rm <插件>",
+				"p upload <插件>",
+				"p on|off <插件>",
+				"p info <插件>",
+				"p doctor",
+			},
+			OwnerOnly: true,
+			Handler:   p.plugins,
 		},
 	}
 }
@@ -148,7 +286,7 @@ func (p *Plugin) updateFramework(ctx context.Context, request command.Request) e
 			return p.respondUpdateUsage(ctx, request)
 		}
 		return p.checkFrameworkUpdate(ctx, request)
-	case "", "force":
+	case "", "force", "-f", "--force":
 		if len(request.Args) > 1 {
 			return p.respondUpdateUsage(ctx, request)
 		}
@@ -162,7 +300,8 @@ func (p *Plugin) updateFramework(ctx context.Context, request command.Request) e
 	if err := p.respond(ctx, request, "🔎 正在检查 TeleBox-Go 更新…"); err != nil {
 		return err
 	}
-	result, err := p.updater.Update(ctx, action == "force")
+	force := action == "force" || action == "-f" || action == "--force"
+	result, err := p.updater.Update(ctx, force)
 	if err != nil {
 		return p.respondHTML(ctx, request,
 			"<b>❌ 更新失败</b>\n\n"+html.EscapeString(err.Error()))
@@ -229,53 +368,6 @@ func (p *Plugin) respondUpdateUsage(
 		"❌ 用法："+request.Prefix+"update [check|force|help]")
 }
 
-func (p *Plugin) status(ctx context.Context, request command.Request) error {
-	scanStarted := time.Now()
-	statuses := p.registry.List()
-	enabled := 0
-	for _, status := range statuses {
-		if status.Enabled {
-			enabled++
-		}
-	}
-	hostname, err := os.Hostname()
-	if err != nil || strings.TrimSpace(hostname) == "" {
-		hostname = "N/A"
-	}
-	var memory runtime.MemStats
-	runtime.ReadMemStats(&memory)
-	text := fmt.Sprintf(
-		"<b>📊 TeleBox-Go 运行状态</b>\n\n"+
-			"<b>🏠 主机信息</b>\n"+
-			"• 主机名：<code>%s</code>\n"+
-			"• 平台：<code>%s %s</code>\n"+
-			"• CPU 核心：<code>%d</code>\n\n"+
-			"<b>📦 版本信息</b>\n"+
-			"• Go：<code>%s</code>\n"+
-			"• TeleBox-Go：<code>%s</code>\n\n"+
-			"<b>📈 运行资源</b>\n"+
-			"• 进程内存：<code>%s</code>\n"+
-			"• Goroutine：<code>%d</code>\n"+
-			"• 插件：<code>%d/%d</code> 已启用\n\n"+
-			"<b>⏱️ 运行状态</b>\n"+
-			"• 运行时间：<code>%s</code>\n"+
-			"• 扫描耗时：<code>%dms</code>",
-		html.EscapeString(hostname),
-		html.EscapeString(runtime.GOOS),
-		html.EscapeString(runtime.GOARCH),
-		runtime.NumCPU(),
-		html.EscapeString(runtime.Version()),
-		html.EscapeString(p.Metadata().Version),
-		html.EscapeString(formatBytes(memory.Alloc)),
-		runtime.NumGoroutine(),
-		enabled,
-		len(statuses),
-		html.EscapeString(formatDuration(time.Since(p.started))),
-		time.Since(scanStarted).Milliseconds(),
-	)
-	return p.respondHTML(ctx, request, text)
-}
-
 func (p *Plugin) prefix(ctx context.Context, request command.Request) error {
 	if len(request.Args) == 0 ||
 		(len(request.Args) == 1 &&
@@ -314,8 +406,9 @@ func (p *Plugin) prefix(ctx context.Context, request command.Request) error {
 	)
 }
 
-func (p *Plugin) Start(context.Context) error {
+func (p *Plugin) Start(ctx context.Context) error {
 	p.started = time.Now()
+	p.loadAccessSettings(ctx)
 	return nil
 }
 
@@ -323,47 +416,24 @@ func (p *Plugin) Stop(context.Context) error {
 	return nil
 }
 
-func (p *Plugin) ping(ctx context.Context, request command.Request) error {
-	apiStarted := time.Now()
-	if _, err := p.services.Telegram.ResolveUser(ctx, "me"); err != nil {
-		p.services.Logger.Warn("Telegram latency probe failed", "error", err)
-		return p.respond(ctx, request, "❌ Telegram 连接不可用")
-	}
-	apiLatency := time.Since(apiStarted).Milliseconds()
-
-	messageLatency := int64(0)
-	if request.Message.Outgoing {
-		messageStarted := time.Now()
-		if _, err := p.services.Telegram.EditText(
-			ctx,
-			request.Message.ChatID,
-			request.Message.ID,
-			"🏓 Pong!",
-		); err != nil {
-			return err
-		}
-		messageLatency = time.Since(messageStarted).Milliseconds()
-	}
-
-	text := fmt.Sprintf(
-		"<b>🏓 Pong!</b>\n\n"+
-			"📡 API 延迟：<code>%dms</code>\n"+
-			"✏️ 消息延迟：<code>%dms</code>\n\n"+
-			"⏰ <i>%s</i>",
-		apiLatency,
-		messageLatency,
-		time.Now().Format("2006/01/02 15:04:05"),
-	)
-	return p.respondHTML(ctx, request, text)
-}
-
 func (p *Plugin) help(ctx context.Context, request command.Request) error {
 	routes := visibleHelpRoutes(p.router.List(), p.router.IsOwner(request.Message))
 	if len(request.Args) > 0 {
 		target := strings.TrimSpace(request.Args[0])
 		target = strings.TrimPrefix(target, request.Prefix)
+		if resolved, ok := p.router.ResolveUserAlias(target); ok {
+			target = strings.Fields(resolved)[0]
+		}
 		if route, ok := findHelpRoute(routes, target); ok {
-			return p.respondHTML(ctx, request, formatCommandHelp(request.Prefix, route))
+			return p.respondHTML(
+				ctx,
+				request,
+				formatCommandHelp(
+					request.Prefix,
+					route,
+					p.router.UserAliases(),
+				),
+			)
 		}
 		return p.respondHTML(ctx, request, fmt.Sprintf(
 			"<b>❌ 未找到命令</b>\n\n<code>%s</code>\n\n发送 <code>%s</code> 查看命令列表",
@@ -415,7 +485,11 @@ func formatCommandList(prefix string, routes []command.RouteInfo) string {
 		"</code> 查看特定命令的帮助"
 }
 
-func formatCommandHelp(prefix string, route command.RouteInfo) string {
+func formatCommandHelp(
+	prefix string,
+	route command.RouteInfo,
+	userAliases ...map[string]string,
+) string {
 	lines := []string{
 		"<b>命令帮助</b>\n<code>" +
 			html.EscapeString(prefix+route.Name) +
@@ -424,6 +498,22 @@ func formatCommandHelp(prefix string, route command.RouteInfo) string {
 	if route.Description != "" {
 		lines = append(lines, "", html.EscapeString(route.Description))
 	}
+	if len(route.Usage) > 0 {
+		lines = append(lines, "", "<b>用法：</b>")
+		for _, usage := range route.Usage {
+			lines = append(lines, "• <code>"+
+				html.EscapeString(prefix+usage)+
+				"</code>")
+		}
+	}
+	if strings.TrimSpace(route.HelpHTML) != "" {
+		guide := strings.ReplaceAll(
+			route.HelpHTML,
+			"{{prefix}}",
+			html.EscapeString(prefix),
+		)
+		lines = append(lines, "", guide)
+	}
 	if len(route.Aliases) > 0 {
 		aliases := make([]string, 0, len(route.Aliases))
 		for _, alias := range route.Aliases {
@@ -431,28 +521,224 @@ func formatCommandHelp(prefix string, route command.RouteInfo) string {
 		}
 		lines = append(lines, "", "别名："+strings.Join(aliases, "、"))
 	}
+	if len(userAliases) > 0 {
+		custom := formatUserAliases(prefix, route, userAliases[0])
+		if len(custom) > 0 {
+			lines = append(lines, "", "自定义别名：")
+			lines = append(lines, custom...)
+		}
+	}
 	if route.OwnerOnly {
 		lines = append(lines, "权限：仅所有者")
 	}
 	return strings.Join(lines, "\n")
 }
 
+func formatUserAliases(
+	prefix string,
+	route command.RouteInfo,
+	aliases map[string]string,
+) []string {
+	routeNames := map[string]struct{}{route.Name: {}}
+	for _, alias := range route.Aliases {
+		routeNames[alias] = struct{}{}
+	}
+	names := make([]string, 0)
+	for alias, target := range aliases {
+		fields := strings.Fields(target)
+		if len(fields) == 0 {
+			continue
+		}
+		if _, ok := routeNames[strings.ToLower(fields[0])]; !ok {
+			continue
+		}
+		names = append(names, alias)
+	}
+	sort.Strings(names)
+	result := make([]string, 0, len(names))
+	for _, alias := range names {
+		result = append(
+			result,
+			"• <code>"+html.EscapeString(prefix+alias)+"</code> → <code>"+
+				html.EscapeString(prefix+aliases[alias])+"</code>",
+		)
+	}
+	return result
+}
+
+func (p *Plugin) alias(ctx context.Context, request command.Request) error {
+	if len(request.Args) == 0 {
+		return p.aliasHelp(ctx, request)
+	}
+	switch strings.ToLower(request.Args[0]) {
+	case "ls", "list":
+		if len(request.Args) != 1 {
+			return p.aliasHelp(ctx, request)
+		}
+		return p.listAliases(ctx, request)
+	case "set", "add":
+		alias, target, err := splitAliasSet(request.Args[1:], p.router)
+		if err != nil {
+			return p.respond(ctx, request, "❌ "+err.Error())
+		}
+		targetCommand := strings.ToLower(strings.Fields(target)[0])
+		if !p.router.HasRoute(targetCommand) {
+			return p.respond(
+				ctx,
+				request,
+				"❌ 未找到原始命令："+targetCommand,
+			)
+		}
+		next := p.router.UserAliases()
+		for existing, final := range next {
+			if strings.EqualFold(
+				strings.Join(strings.Fields(final), " "),
+				strings.Join(strings.Fields(target), " "),
+			) {
+				delete(next, existing)
+			}
+		}
+		next[alias] = target
+		if err := p.saveAliases(ctx, next); err != nil {
+			return p.respond(ctx, request, "❌ 保存别名失败："+err.Error())
+		}
+		return p.respond(
+			ctx,
+			request,
+			"✅ 命令别名已保存\n\n"+alias+" → "+target,
+		)
+	case "del", "delete", "rm", "remove":
+		alias := strings.ToLower(
+			strings.Join(strings.Fields(strings.Join(request.Args[1:], " ")), " "),
+		)
+		if alias == "" {
+			return p.respond(ctx, request, "❌ 用法："+request.Prefix+"alias del <别名...>")
+		}
+		next := p.router.UserAliases()
+		if _, exists := next[alias]; !exists {
+			return p.respond(ctx, request, "❌ 未找到别名："+alias)
+		}
+		delete(next, alias)
+		if err := p.saveAliases(ctx, next); err != nil {
+			return p.respond(ctx, request, "❌ 删除别名失败："+err.Error())
+		}
+		return p.respond(ctx, request, "✅ 已删除命令别名："+alias)
+	default:
+		return p.aliasHelp(ctx, request)
+	}
+}
+
+func splitAliasSet(args []string, router *command.Router) (string, string, error) {
+	if len(args) < 2 {
+		return "", "", errors.New("用法：alias set <别名...> <原命令...>")
+	}
+	split := -1
+	for index := 1; index < len(args); index++ {
+		if router.HasRoute(args[index]) {
+			split = index
+			break
+		}
+	}
+	if split < 1 {
+		split = 1
+	}
+	alias := strings.ToLower(strings.Join(args[:split], " "))
+	target := strings.Join(args[split:], " ")
+	alias = strings.Join(strings.Fields(alias), " ")
+	target = strings.Join(strings.Fields(target), " ")
+	if alias == "" || target == "" {
+		return "", "", errors.New("用法：alias set <别名...> <原命令...>")
+	}
+	return alias, target, nil
+}
+
+func (p *Plugin) saveAliases(
+	ctx context.Context,
+	aliases map[string]string,
+) error {
+	previous := p.router.UserAliases()
+	if err := p.router.SetUserAliases(aliases); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(p.router.UserAliases())
+	if err != nil {
+		_ = p.router.SetUserAliases(previous)
+		return err
+	}
+	if err := p.services.Storage.Put(
+		ctx,
+		"core",
+		"command_aliases",
+		encoded,
+	); err != nil {
+		_ = p.router.SetUserAliases(previous)
+		return err
+	}
+	return nil
+}
+
+func (p *Plugin) listAliases(
+	ctx context.Context,
+	request command.Request,
+) error {
+	aliases := p.router.UserAliases()
+	if len(aliases) == 0 {
+		return p.respond(ctx, request, "当前没有命令别名")
+	}
+	names := make([]string, 0, len(aliases))
+	for alias := range aliases {
+		names = append(names, alias)
+	}
+	sort.Strings(names)
+	lines := []string{"<b>🏷️ 命令别名</b>", ""}
+	for _, alias := range names {
+		lines = append(
+			lines,
+			"• <code>"+html.EscapeString(alias)+"</code> → <code>"+
+				html.EscapeString(aliases[alias])+"</code>",
+		)
+	}
+	return p.respondHTML(ctx, request, strings.Join(lines, "\n"))
+}
+
+func (p *Plugin) aliasHelp(
+	ctx context.Context,
+	request command.Request,
+) error {
+	prefix := html.EscapeString(request.Prefix)
+	return p.respondHTML(ctx, request, strings.Join([]string{
+		"<b>🏷️ 命令别名</b>",
+		"",
+		"• <code>" + prefix + "alias set &lt;别名...&gt; &lt;原命令...&gt;</code>",
+		"• <code>" + prefix + "alias del &lt;别名...&gt;</code>",
+		"• <code>" + prefix + "alias ls</code>",
+		"",
+		"支持多词别名和固定参数；执行时会把额外参数接在目标命令之后。",
+	}, "\n"))
+}
+
 func (p *Plugin) plugins(ctx context.Context, request command.Request) error {
 	if len(request.Args) == 0 {
-		return p.listPlugins(ctx, request)
+		return p.listPlugins(ctx, request, false)
 	}
 
 	action := strings.ToLower(strings.TrimSpace(request.Args[0]))
 	args := request.Args[1:]
 	switch action {
 	case "ls", "list":
-		return p.listPlugins(ctx, request)
+		verbose := len(args) > 0 &&
+			(strings.EqualFold(args[0], "-v") || strings.EqualFold(args[0], "--verbose"))
+		return p.listPlugins(ctx, request, verbose)
+	case "lv":
+		return p.listPlugins(ctx, request, true)
 	case "i", "install", "add":
 		return p.installPlugin(ctx, request, args)
-	case "u", "up", "update", "upgrade":
+	case "u", "up", "update", "upgrade", "updateall", "ua":
 		return p.updatePlugins(ctx, request, args)
-	case "rm", "remove", "del", "uninstall":
+	case "rm", "remove", "del", "uninstall", "un":
 		return p.removePlugin(ctx, request, args)
+	case "upload", "ul":
+		return p.uploadPlugin(ctx, request, args)
 	case "s", "search", "find":
 		return p.searchPlugins(ctx, request, args)
 	case "on", "enable", "off", "disable":
@@ -471,7 +757,11 @@ func (p *Plugin) plugins(ctx context.Context, request command.Request) error {
 	}
 }
 
-func (p *Plugin) listPlugins(ctx context.Context, request command.Request) error {
+func (p *Plugin) listPlugins(
+	ctx context.Context,
+	request command.Request,
+	verbose bool,
+) error {
 	statuses := p.registry.List()
 	sort.Slice(statuses, func(i, j int) bool {
 		return statuses[i].Metadata.Name < statuses[j].Metadata.Name
@@ -493,12 +783,16 @@ func (p *Plugin) listPlugins(ctx context.Context, request command.Request) error
 		if status.Enabled {
 			state = "✅"
 		}
-		lines = append(lines, fmt.Sprintf(
+		line := fmt.Sprintf(
 			"%s <code>%s</code>  ·  v%s",
 			state,
 			html.EscapeString(status.Metadata.Name),
 			html.EscapeString(strings.TrimPrefix(status.Metadata.Version, "v")),
-		))
+		)
+		if verbose && strings.TrimSpace(status.Metadata.Description) != "" {
+			line += "\n  " + html.EscapeString(status.Metadata.Description)
+		}
+		lines = append(lines, line)
 	}
 	lines = append(lines, "", "管理插件：<code>"+
 		html.EscapeString(request.Prefix+"p help")+"</code>")
@@ -510,32 +804,46 @@ func (p *Plugin) installPlugin(
 	request command.Request,
 	args []string,
 ) error {
-	if len(args) < 1 || len(args) > 2 {
+	if len(args) == 0 {
+		return p.installRepliedPlugin(ctx, request)
+	}
+	if len(args) < 1 {
 		return p.respond(ctx, request,
-			"❌ 用法："+request.Prefix+"p i <插件名>[@版本]",
+			"❌ 用法："+request.Prefix+"p i <插件名[@版本]...>",
 		)
 	}
 	name, version := splitPluginReference(args[0])
-	if len(args) == 2 {
-		version = args[1]
-	}
 	if name == "all" {
+		if len(args) != 1 {
+			return p.respond(ctx, request, "❌ all 不能与其他插件名同时使用")
+		}
 		return p.installAllPlugins(ctx, request, version)
 	}
-	result, err := p.packages.Install(ctx, name, version)
-	if err != nil {
-		return p.respondPackageError(ctx, request, err)
+	var (
+		installed []string
+		failures  []string
+	)
+	for _, reference := range args {
+		name, version = splitPluginReference(reference)
+		result, err := p.packages.Install(ctx, name, version)
+		if err != nil {
+			failures = append(failures, name)
+			p.services.Logger.Warn("install plugin failed", "plugin", name, "error", err)
+			continue
+		}
+		installed = append(
+			installed,
+			result.Installed.Manifest.Name+"@"+result.Installed.Manifest.Version,
+		)
 	}
-	title := "✅ 插件已安装"
-	if result.Previous != "" {
-		title = "✅ 插件已更新"
+	if len(installed) == 0 {
+		return p.respond(ctx, request, "❌ 插件安装失败："+strings.Join(failures, "、"))
 	}
-	return p.respondHTML(ctx, request, fmt.Sprintf(
-		"<b>%s</b>\n\n• <code>%s</code>\n• 版本：<code>%s</code>",
-		title,
-		html.EscapeString(result.Installed.Manifest.Name),
-		html.EscapeString(result.Installed.Manifest.Version),
-	))
+	text := "✅ 已安装并启用：\n• " + strings.Join(installed, "\n• ")
+	if len(failures) > 0 {
+		text += "\n\n⚠️ 安装失败：" + strings.Join(failures, "、")
+	}
+	return p.respond(ctx, request, text)
 }
 
 func (p *Plugin) installAllPlugins(
@@ -630,16 +938,42 @@ func (p *Plugin) removePlugin(
 	request command.Request,
 	args []string,
 ) error {
-	if len(args) != 1 {
+	if len(args) == 0 {
 		return p.respond(ctx, request,
-			"❌ 用法："+request.Prefix+"p rm <插件名>",
+			"❌ 用法："+request.Prefix+"p rm <插件名...|all>",
 		)
 	}
-	name, _ := splitPluginReference(args[0])
-	if err := p.packages.Remove(ctx, name); err != nil {
-		return p.respondPackageError(ctx, request, err)
+	if len(args) == 1 && strings.EqualFold(args[0], "all") {
+		installed, err := p.packages.Installed()
+		if err != nil && len(installed) == 0 {
+			return p.respondPackageError(ctx, request, err)
+		}
+		args = args[:0]
+		for _, item := range installed {
+			args = append(args, item.Manifest.Name)
+		}
 	}
-	return p.respond(ctx, request, "✅ 插件 "+name+" 已卸载")
+	var removed, failures []string
+	for _, reference := range args {
+		name, _ := splitPluginReference(reference)
+		if err := p.packages.Remove(ctx, name); err != nil {
+			failures = append(failures, name)
+			p.services.Logger.Warn("remove plugin failed", "plugin", name, "error", err)
+			continue
+		}
+		removed = append(removed, name)
+	}
+	if len(removed) == 0 {
+		if len(failures) == 0 {
+			return p.respond(ctx, request, "✅ 当前没有可卸载的业务插件")
+		}
+		return p.respond(ctx, request, "❌ 插件卸载失败："+strings.Join(failures, "、"))
+	}
+	text := "✅ 已卸载：" + strings.Join(removed, "、")
+	if len(failures) > 0 {
+		text += "\n⚠️ 卸载失败：" + strings.Join(failures, "、")
+	}
+	return p.respond(ctx, request, text)
 }
 
 func (p *Plugin) searchPlugins(
@@ -770,11 +1104,14 @@ func (p *Plugin) pluginHelp(
 		"<b>🧩 插件管理</b>",
 		"",
 		"• <code>" + html.EscapeString(prefix+"ls") + "</code>  已安装插件",
+		"• <code>" + html.EscapeString(prefix+"ls -v") + "</code>  已安装插件详情",
 		"• <code>" + html.EscapeString(prefix+"s [关键词]") + "</code>  搜索插件",
-		"• <code>" + html.EscapeString(prefix+"i 插件名") + "</code>  安装插件",
+		"• <code>" + html.EscapeString(prefix+"i 插件名[@版本]...") + "</code>  安装一个或多个插件",
+		"• <code>" + html.EscapeString(prefix+"i") + "</code>  回复已编译插件包安装",
 		"• <code>" + html.EscapeString(prefix+"i all") + "</code>  安装全部官方插件",
 		"• <code>" + html.EscapeString(prefix+"u [插件名]") + "</code>  更新插件",
-		"• <code>" + html.EscapeString(prefix+"rm 插件名") + "</code>  卸载插件",
+		"• <code>" + html.EscapeString(prefix+"rm 插件名...|all") + "</code>  卸载插件",
+		"• <code>" + html.EscapeString(prefix+"upload 插件名") + "</code>  导出当前平台插件包",
 		"• <code>" + html.EscapeString(prefix+"on 插件名") + "</code>  启用插件",
 		"• <code>" + html.EscapeString(prefix+"off 插件名") + "</code>  停用插件",
 		"• <code>" + html.EscapeString(prefix+"doctor") + "</code>  检查插件",

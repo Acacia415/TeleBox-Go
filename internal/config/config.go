@@ -17,13 +17,14 @@ import (
 // will be stored separately so one plugin cannot accidentally receive another
 // plugin's secrets.
 type Config struct {
-	Telegram TelegramConfig `json:"telegram"`
-	Commands CommandConfig  `json:"commands"`
-	Storage  StorageConfig  `json:"storage"`
-	Tools    ToolConfig     `json:"tools"`
-	HTTP     HTTPConfig     `json:"http"`
-	Plugins  PluginConfig   `json:"plugins"`
-	Logging  LoggingConfig  `json:"logging"`
+	SourcePath string         `json:"-"`
+	Telegram   TelegramConfig `json:"telegram"`
+	Commands   CommandConfig  `json:"commands"`
+	Storage    StorageConfig  `json:"storage"`
+	Tools      ToolConfig     `json:"tools"`
+	HTTP       HTTPConfig     `json:"http"`
+	Plugins    PluginConfig   `json:"plugins"`
+	Logging    LoggingConfig  `json:"logging"`
 }
 
 type TelegramConfig struct {
@@ -67,6 +68,7 @@ type PluginConfig struct {
 type LoggingConfig struct {
 	Level  string `json:"level"`
 	Format string `json:"format"`
+	Path   string `json:"path"`
 }
 
 func Default() Config {
@@ -104,6 +106,7 @@ func Default() Config {
 		Logging: LoggingConfig{
 			Level:  "info",
 			Format: "text",
+			Path:   "data/logs/telebox.log",
 		},
 	}
 }
@@ -140,6 +143,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("resolve config directory: %w", err)
 	}
 	cfg.resolvePaths(baseDir)
+	cfg.SourcePath = resolvePath(baseDir, filepath.Base(path))
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -224,7 +228,7 @@ func (c Config) Validate() error {
 	}
 
 	switch strings.ToLower(c.Logging.Level) {
-	case "debug", "info", "warn", "error":
+	case "debug", "info", "warning", "warn", "error", "silent", "off":
 	default:
 		problems = append(problems, "logging.level must be debug, info, warn, or error")
 	}
@@ -232,6 +236,9 @@ func (c Config) Validate() error {
 	case "text", "json":
 	default:
 		problems = append(problems, "logging.format must be text or json")
+	}
+	if strings.TrimSpace(c.Logging.Path) == "" {
+		problems = append(problems, "logging.path is required")
 	}
 
 	if len(problems) > 0 {
@@ -245,6 +252,7 @@ func (c *Config) resolvePaths(baseDir string) {
 	c.Storage.Path = resolvePath(baseDir, c.Storage.Path)
 	c.Storage.AssetsPath = resolvePath(baseDir, c.Storage.AssetsPath)
 	c.Plugins.Directory = resolvePath(baseDir, c.Plugins.Directory)
+	c.Logging.Path = resolvePath(baseDir, c.Logging.Path)
 }
 
 func resolvePath(baseDir, path string) string {
@@ -288,6 +296,9 @@ func applyEnvironment(cfg *Config) error {
 	}
 	if value, ok := os.LookupEnv("TELEBOX_LOG_FORMAT"); ok {
 		cfg.Logging.Format = strings.ToLower(strings.TrimSpace(value))
+	}
+	if value, ok := os.LookupEnv("TELEBOX_LOG_PATH"); ok {
+		cfg.Logging.Path = value
 	}
 	return nil
 }

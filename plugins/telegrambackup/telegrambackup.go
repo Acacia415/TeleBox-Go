@@ -48,7 +48,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "telegram-backup",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "备份私聊消息元数据以及群组、频道链接并导出安全 ZIP",
 	}
 }
@@ -57,8 +57,22 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "tb",
 		Description: "Telegram 对话与链接备份",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"tb saved",
+			"tb private",
+			"tb chat [@用户名]",
+			"tb all",
+			"tb groups|channels|links",
+			"tb showgroups",
+			"tb join",
+			"tb list",
+			"tb export <ID>|exportall",
+			"tb restore|restoreall（回复 JSON/ZIP）",
+			"tb delete <ID>",
+			"tb clear confirm",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 
@@ -358,6 +372,11 @@ func (p *Plugin) messageRecord(
 		Text:       message.Text,
 		ReplyToID:  message.ReplyToID,
 	}
+	if message.ForwardSenderID != 0 {
+		record.Forward = strconv.FormatInt(message.ForwardSenderID, 10)
+	} else if message.ForwardName != "" {
+		record.Forward = message.ForwardName
+	}
 	if message.SenderID == 0 {
 		record.SenderID = ""
 	}
@@ -420,7 +439,10 @@ func (p *Plugin) backupLinks(
 		if linkType != "" && linkType != kind {
 			continue
 		}
-		link := ""
+		if detailed, resolveErr := p.services.Telegram.ResolveChat(ctx, chat.ID); resolveErr == nil {
+			chat = detailed
+		}
+		link := chat.InviteLink
 		if chat.Username != "" {
 			link = "https://t.me/" + strings.TrimPrefix(chat.Username, "@")
 		}
@@ -431,6 +453,7 @@ func (p *Plugin) backupLinks(
 			Username:    chat.Username,
 			InviteLink:  link,
 			MemberCount: chat.MemberCount,
+			Description: chat.Description,
 			Verified:    chat.Verified,
 			Scam:        chat.Scam,
 			Fake:        chat.Fake,
@@ -445,7 +468,7 @@ func (p *Plugin) backupLinks(
 	}
 	return p.respond(ctx, request, fmt.Sprintf(
 		"✅ 链接备份完成\n群组：%d\n频道：%d\n"+
-			"仅公开用户名可生成可加入链接；私有邀请链接不会被主动导出。",
+			"已保存公开链接，以及当前账号有权读取的私有邀请链接。",
 		savedGroups,
 		savedChannels,
 	))

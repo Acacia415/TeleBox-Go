@@ -21,6 +21,21 @@ const cacheTTL = 30 * 24 * time.Hour
 
 var nonDigit = regexp.MustCompile(`\D`)
 
+var (
+	ogDescription = regexp.MustCompile(
+		`(?is)<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']`,
+	)
+	bincheckDescription = regexp.MustCompile(
+		`(?i)valid BIN number\s+([A-Z ]+)\s+issued by\s+(.+?)\s+in\s+(.+)$`,
+	)
+)
+
+type bincheckData struct {
+	Scheme  string
+	Bank    string
+	Country string
+}
+
 type payload struct {
 	Number struct {
 		Length int   `json:"length"`
@@ -61,7 +76,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "bin",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "查询银行卡 BIN/IIN 发行信息",
 	}
 }
@@ -70,6 +85,7 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "bin",
 		Description: "查询 6–8 位银行卡 BIN/IIN",
+		Usage:       []string{"bin <6–8位卡头>"},
 		OwnerOnly:   true,
 		Handler:     p.handle,
 	}}
@@ -120,6 +136,7 @@ func (p *Plugin) lookup(ctx context.Context, number string) (payload, bool, erro
 		}
 	}
 
+	bincheck := p.lookupBincheck(ctx, number)
 	response, err := p.services.HTTP.Do(ctx, httpclient.Request{
 		URL: "https://lookup.binlist.net/" + number,
 		Headers: http.Header{
@@ -142,6 +159,15 @@ func (p *Plugin) lookup(ctx context.Context, number string) (payload, bool, erro
 	if err := json.Unmarshal(response.Body, &result); err != nil {
 		return payload{}, false, fmt.Errorf("解析 BIN 查询结果失败：%w", err)
 	}
+	if bincheck.Scheme != "" {
+		result.Scheme = bincheck.Scheme
+	}
+	if bincheck.Bank != "" {
+		result.Bank.Name = bincheck.Bank
+	}
+	if bincheck.Country != "" {
+		result.Country.Name = bincheck.Country
+	}
 
 	entry := cacheEntry{FetchedAt: p.now().UTC(), Payload: result}
 	if encoded, err := json.Marshal(entry); err == nil {
@@ -150,6 +176,53 @@ func (p *Plugin) lookup(ctx context.Context, number string) (payload, bool, erro
 		}
 	}
 	return result, false, nil
+}
+
+func (p *Plugin) lookupBincheck(ctx context.Context, number string) bincheckData {
+	response, err := p.services.HTTP.Do(ctx, httpclient.Request{
+		URL: "https://bincheck.io/details/" + number[:6],
+	})
+	if err != nil || response.StatusCode != http.StatusOK {
+		return bincheckData{}
+	}
+	return parseBincheck(response.Body)
+}
+
+func parseBincheck(document []byte) bincheckData {
+	match := ogDescription.FindSubmatch(document)
+	if len(match) != 2 {
+		// Some responses place content before property.
+		reversed := regexp.MustCompile(
+			`(?is)<meta[^>]+content=["']([^"']*)["'][^>]+property=["']og:description["']`,
+		).FindSubmatch(document)
+		if len(reversed) != 2 {
+			return bincheckData{}
+		}
+		match = reversed
+	}
+	decoded := html.UnescapeString(string(match[1]))
+	description := strings.TrimSpace(decoded)
+	parts := bincheckDescription.FindStringSubmatch(description)
+	if len(parts) == 4 {
+		return bincheckData{
+			Scheme:  strings.ToLower(strings.ReplaceAll(strings.TrimSpace(parts[1]), " ", "")),
+			Bank:    strings.TrimSpace(parts[2]),
+			Country: strings.TrimSpace(parts[3]),
+		}
+	}
+
+	// bincheck.io has used both a sentence and a compact
+	// "Scheme - Bank - Country" Open Graph description. Accept the latter
+	// without coupling the parser to the rest of the page.
+	compact := strings.SplitN(description, " - ", 3)
+	if len(compact) != 3 {
+		return bincheckData{}
+	}
+	return bincheckData{
+		Scheme:  strings.ToLower(strings.ReplaceAll(strings.TrimSpace(compact[0]), " ", "")),
+		Bank:    strings.TrimSpace(compact[1]),
+		Country: strings.TrimSpace(compact[2]),
+	}
 }
 
 func (p *Plugin) respond(ctx context.Context, request command.Request, text string) error {

@@ -310,10 +310,12 @@ func main() {
 	commands := make([]pluginapi.Command, 0, len(definitions))
 	for _, definition := range definitions {
 		commands = append(commands, pluginapi.Command{
-			Name: definition.Name,
-			Aliases: definition.Aliases,
+			Name:        definition.Name,
+			Aliases:     definition.Aliases,
 			Description: definition.Description,
-			OwnerOnly: definition.OwnerOnly,
+			Usage:       definition.Usage,
+			HelpHTML:    definition.HelpHTML,
+			OwnerOnly:   definition.OwnerOnly,
 		})
 	}
 	listens := false

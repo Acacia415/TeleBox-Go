@@ -1,7 +1,9 @@
 package speedlink
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -14,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,6 +27,7 @@ import (
 	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/command"
+	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
@@ -32,7 +36,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const backupVersion = 1
+const (
+	backupVersion    = 1
+	speedtestVersion = "1.2.0"
+)
 
 type remoteServer struct {
 	Name          string `json:"name"`
@@ -101,21 +108,30 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "speedlink",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "通过 SSH 在本机或多台远程服务器运行 Ookla Speedtest",
 	}
 }
 
 func (p *Plugin) Commands() []command.Definition {
-	definition := func(name string) command.Definition {
-		return command.Definition{
-			Name:        name,
-			Description: "多服务器 SSH 网络测速",
-			OwnerOnly:   true,
-			Handler:     p.handle,
-		}
-	}
-	return []command.Definition{definition("speedlink"), definition("sl")}
+	return []command.Definition{{
+		Name:        "speedlink",
+		Aliases:     []string{"sl"},
+		Description: "在本机或多台远程服务器运行 Ookla Speedtest",
+		Usage: []string{
+			"sl",
+			"sl <序号...>|all",
+			"sl add <别名> <user@host:port> password <密码>",
+			"sl add <别名> <user@host:port> key <私钥绝对路径>",
+			"sl list",
+			"sl del <序号>",
+			"sl backup",
+			"sl restore confirm（回复备份文件）",
+		},
+		HelpHTML:  speedlinkGuideHTML,
+		OwnerOnly: true,
+		Handler:   p.handle,
+	}}
 }
 
 func (p *Plugin) Start(ctx context.Context) error {
@@ -298,8 +314,14 @@ func (p *Plugin) remove(ctx context.Context, request command.Request) error {
 func (p *Plugin) runLocal(ctx context.Context, request command.Request) error {
 	executable, err := p.findSpeedtest()
 	if err != nil {
-		return p.respond(ctx, request,
-			"❌ 未找到官方 Ookla Speedtest CLI；请安装到 PATH 或迁移 speedlink 资产")
+		if err := p.respond(ctx, request, "⏳ 本机 Speedtest CLI 不存在，正在自动安装…"); err != nil {
+			return err
+		}
+		executable, err = p.installSpeedtest(ctx)
+		if err != nil {
+			return p.respond(ctx, request,
+				"❌ 自动安装 Ookla Speedtest CLI 失败："+sanitizeError(err))
+		}
 	}
 	if err := p.respond(ctx, request, "⏳ 本机测速…"); err != nil {
 		return err
@@ -605,6 +627,95 @@ func (p *Plugin) findSpeedtest() (string, error) {
 		}
 	}
 	return "", toolrunner.ErrExecutableNotFound
+}
+
+func (p *Plugin) installSpeedtest(ctx context.Context) (string, error) {
+	if runtime.GOOS != "linux" {
+		return "", fmt.Errorf("不支持在 %s 上自动安装，请将官方 speedtest 加入 PATH", runtime.GOOS)
+	}
+	architecture := map[string]string{
+		"amd64": "x86_64",
+		"arm64": "aarch64",
+		"arm":   "armhf",
+	}[runtime.GOARCH]
+	if architecture == "" {
+		return "", fmt.Errorf("不支持的 Linux 架构 %s", runtime.GOARCH)
+	}
+	filename := fmt.Sprintf(
+		"ookla-speedtest-%s-linux-%s.tgz",
+		speedtestVersion,
+		architecture,
+	)
+	response, err := p.services.HTTP.Do(ctx, httpclient.Request{
+		URL: "https://install.speedtest.net/app/cli/" + filename,
+	})
+	if err != nil {
+		return "", fmt.Errorf("下载 %s: %w", filename, err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("下载 %s: HTTP %d", filename, response.StatusCode)
+	}
+	target := filepath.Join(p.assetDir, "speedtest")
+	if err := extractSpeedtestArchive(response.Body, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func extractSpeedtestArchive(document []byte, target string) error {
+	compressed, err := gzip.NewReader(bytes.NewReader(document))
+	if err != nil {
+		return fmt.Errorf("打开 Speedtest 压缩包: %w", err)
+	}
+	defer compressed.Close()
+	archive := tar.NewReader(compressed)
+	for {
+		header, nextErr := archive.Next()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return fmt.Errorf("读取 Speedtest 压缩包: %w", nextErr)
+		}
+		if header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != "speedtest" {
+			continue
+		}
+		if header.Size <= 0 || header.Size > 32<<20 {
+			return errors.New("Speedtest 可执行文件大小无效")
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		temp, err := os.CreateTemp(filepath.Dir(target), ".speedtest-*.tmp")
+		if err != nil {
+			return err
+		}
+		tempPath := temp.Name()
+		defer os.Remove(tempPath)
+		if err := temp.Chmod(0o700); err != nil {
+			_ = temp.Close()
+			return err
+		}
+		if _, err := io.CopyN(temp, archive, header.Size); err != nil {
+			_ = temp.Close()
+			return fmt.Errorf("解压 Speedtest: %w", err)
+		}
+		if err := temp.Sync(); err != nil {
+			_ = temp.Close()
+			return err
+		}
+		if err := temp.Close(); err != nil {
+			return err
+		}
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(tempPath, target); err != nil {
+			return err
+		}
+		return nil
+	}
+	return errors.New("Speedtest 压缩包中没有可执行文件")
 }
 
 func parseConnection(value string) (username, host string, port int, err error) {
@@ -987,12 +1098,66 @@ func (w *boundedWriter) Write(data []byte) (int, error) {
 
 func helpText(prefix string) string {
 	return "⚡️ SpeedLink 多服务器测速\n\n" +
-		prefix + "sl  本机测速\n" +
-		prefix + "sl <序号...> / all  远程测速\n" +
+		"本插件可以对本机或多台远程服务器进行网络速度测试，并保存、管理服务器配置。\n\n" +
+		"⚠️ 远程服务器要求\n" +
+		"远程服务器必须先安装 Ookla Speedtest CLI。\n\n" +
+		"Debian/Ubuntu：\n" +
+		"curl -sL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash\n" +
+		"sudo apt-get install speedtest\n\n" +
+		"CentOS/RHEL：\n" +
+		"curl -sL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.rpm.sh | sudo bash\n" +
+		"sudo yum install speedtest\n\n" +
+		"服务器管理：\n" +
 		prefix + "sl add <别名> <user@host:port> password <密码>\n" +
 		prefix + "sl add <别名> <user@host:port> key <私钥绝对路径>\n" +
-		prefix + "sl list / del <序号>\n" +
-		prefix + "sl backup\n" +
-		prefix + "sl restore confirm（回复备份）\n\n" +
+		prefix + "sl list\n" +
+		prefix + "sl del <序号>\n\n" +
+		"执行测速：\n" +
+		prefix + "sl（本机）\n" +
+		prefix + "sl <序号>（单台远程）\n" +
+		prefix + "sl 1 3 5（多台远程）\n" +
+		prefix + "sl all（全部）\n\n" +
+		"备份与恢复：\n" +
+		prefix + "sl backup（备份到收藏夹）\n" +
+		prefix + "sl restore confirm（回复备份文件，会覆盖现有数据）\n\n" +
 		"首次添加会验证登录并固定 SSH 主机指纹；密码使用 AES-256-GCM 本地加密。"
 }
+
+const speedlinkGuideHTML = `<b>完整教程</b>
+
+本插件可以对本机或多台远程服务器进行网络速度测试，并保存、管理服务器配置。
+
+<b>⚠️ 远程服务器要求</b>
+远程服务器必须先安装 <b>Ookla Speedtest CLI</b>。
+
+<b>Debian/Ubuntu：</b>
+<pre>curl -sL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
+sudo apt-get install speedtest</pre>
+
+<b>CentOS/RHEL：</b>
+<pre>curl -sL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.rpm.sh | sudo bash
+sudo yum install speedtest</pre>
+
+<b>服务器管理</b>
+• 密码认证：
+  <code>{{prefix}}sl add &lt;别名&gt; &lt;user@host:port&gt; password &lt;密码&gt;</code>
+  示例：<code>{{prefix}}sl add 东京-甲骨文 root@1.2.3.4:22 password MyPassword123</code>
+• 密钥认证：
+  <code>{{prefix}}sl add &lt;别名&gt; &lt;user@host:port&gt; key &lt;私钥路径&gt;</code>
+  私钥路径必须是运行 TeleBox 的服务器上的绝对路径。
+  示例：<code>{{prefix}}sl add 法兰克福-谷歌 ubuntu@5.6.7.8:22 key /root/.ssh/id_rsa</code>
+• 查看：<code>{{prefix}}sl list</code>
+• 删除：<code>{{prefix}}sl del &lt;序号&gt;</code>
+
+<b>执行测速</b>
+• 本机：<code>{{prefix}}sl</code>
+• 单台远程：<code>{{prefix}}sl &lt;序号&gt;</code>
+• 多台远程：<code>{{prefix}}sl 1 3 5</code>
+• 全部：<code>{{prefix}}sl all</code>
+
+<b>备份与恢复</b>
+• 备份：<code>{{prefix}}sl backup</code>（发送到收藏夹）
+• 恢复：回复备份文件后发送 <code>{{prefix}}sl restore confirm</code>
+  恢复会覆盖现有服务器数据，请谨慎操作。
+
+首次添加服务器时会验证登录并固定 SSH 主机指纹；密码使用 AES-256-GCM 在本地加密保存。`

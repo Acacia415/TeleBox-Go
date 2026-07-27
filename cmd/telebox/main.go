@@ -19,6 +19,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/app"
 	"github.com/Acacia415/TeleBox-Go/internal/buildinfo"
 	"github.com/Acacia415/TeleBox-Go/internal/config"
+	"github.com/Acacia415/TeleBox-Go/internal/corebackup"
 	gotdclient "github.com/Acacia415/TeleBox-Go/internal/telegram/gotd"
 	"golang.org/x/term"
 	"rsc.io/qr"
@@ -60,6 +61,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "configuration is valid")
 		return 0
 	}
+	if !*loginOnly {
+		result, restoreErr := corebackup.ApplyPending(corebackup.Paths{
+			Config:  cfg.SourcePath,
+			Storage: cfg.Storage.Path,
+			Assets:  cfg.Storage.AssetsPath,
+			Plugins: cfg.Plugins.Directory,
+		})
+		if restoreErr != nil {
+			fmt.Fprintf(stderr, "pending restore was not applied: %v\n", restoreErr)
+		} else if result.Applied {
+			fmt.Fprintf(
+				stderr,
+				"TeleBox-Go backup restored; previous files: %s\n",
+				result.RollbackDir,
+			)
+			if result.Full {
+				cfg, err = config.Load(*configPath)
+				if err != nil {
+					fmt.Fprintf(stderr, "restored configuration error: %v\n", err)
+					return 1
+				}
+			}
+		}
+	}
 	if value := strings.ToLower(strings.TrimSpace(*loginMode)); value != "" {
 		switch value {
 		case "qr", "phone":
@@ -70,7 +95,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	logger := newLogger(stderr, cfg.Logging)
+	logOutput, logFile := openLogOutput(stderr, cfg.Logging.Path)
+	if logFile != nil {
+		defer logFile.Close()
+	}
+	logger, logLevel := newLogger(logOutput, cfg.Logging)
 	var phoneAuth *terminalAuthenticator
 	if strings.EqualFold(cfg.Telegram.LoginMode, "phone") {
 		phoneAuth = newTerminalAuthenticator(os.Stdin, stderr)
@@ -104,7 +133,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		restartRequested.Store(true)
 		stop()
 	}
-	application, err := app.New(ctx, cfg, logger, client, requestRestart)
+	application, err := app.New(
+		ctx,
+		cfg,
+		logger,
+		logLevel,
+		client,
+		requestRestart,
+	)
 	if err != nil {
 		logger.Error("initialize TeleBox", "error", err)
 		return 1
@@ -180,15 +216,20 @@ func renderTerminalQRCode(output io.Writer, code *qr.Code) {
 	}
 }
 
-func newLogger(output io.Writer, cfg config.LoggingConfig) *slog.Logger {
+func newLogger(
+	output io.Writer,
+	cfg config.LoggingConfig,
+) (*slog.Logger, *slog.LevelVar) {
 	level := new(slog.LevelVar)
 	switch strings.ToLower(cfg.Level) {
 	case "debug":
 		level.Set(slog.LevelDebug)
-	case "warn":
+	case "warning", "warn":
 		level.Set(slog.LevelWarn)
 	case "error":
 		level.Set(slog.LevelError)
+	case "silent", "off":
+		level.Set(slog.Level(100))
 	default:
 		level.Set(slog.LevelInfo)
 	}
@@ -200,5 +241,35 @@ func newLogger(output io.Writer, cfg config.LoggingConfig) *slog.Logger {
 	} else {
 		handler = slog.NewTextHandler(output, options)
 	}
-	return slog.New(handler)
+	return slog.New(handler), level
+}
+
+func openLogOutput(
+	stderr io.Writer,
+	path string,
+) (io.Writer, *os.File) {
+	if strings.TrimSpace(path) == "" {
+		return stderr, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		fmt.Fprintf(stderr, "create log directory: %v\n", err)
+		return stderr, nil
+	}
+	if info, err := os.Stat(path); err == nil && info.Size() > 32<<20 {
+		rotated := path + ".1"
+		_ = os.Remove(rotated)
+		if err := os.Rename(path, rotated); err != nil {
+			fmt.Fprintf(stderr, "rotate log file: %v\n", err)
+		}
+	}
+	file, err := os.OpenFile(
+		path,
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY,
+		0o600,
+	)
+	if err != nil {
+		fmt.Fprintf(stderr, "open log file: %v\n", err)
+		return stderr, nil
+	}
+	return io.MultiWriter(stderr, file), file
 }

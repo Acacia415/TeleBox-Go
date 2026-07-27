@@ -34,3 +34,14 @@ func TestFormatPayload(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBincheck(t *testing.T) {
+	t.Parallel()
+
+	got := parseBincheck([]byte(
+		`<meta property="og:description" content="Visa - Example Bank - Taiwan">`,
+	))
+	if got.Scheme != "visa" || got.Bank != "Example Bank" || got.Country != "Taiwan" {
+		t.Fatalf("parseBincheck() = %#v", got)
+	}
+}

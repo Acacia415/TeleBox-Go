@@ -319,9 +319,22 @@ func stableMessage(raw *tg.Message, chatID, selfID int64) teleboxtelegram.Messag
 	}
 
 	replyToID := 0
+	replyQuote := ""
 	if reply, exists := raw.GetReplyTo(); exists {
 		if header, ok := reply.(*tg.MessageReplyHeader); ok {
 			replyToID, _ = header.GetReplyToMsgID()
+			replyQuote, _ = header.GetQuoteText()
+		}
+	}
+	forwardSenderID := int64(0)
+	forwardName := ""
+	if forwarded, ok := raw.GetFwdFrom(); ok {
+		if from, exists := forwarded.GetFromID(); exists {
+			forwardSenderID, _ = peerID(from)
+		}
+		forwardName, _ = forwarded.GetFromName()
+		if forwardName == "" {
+			forwardName, _ = forwarded.GetPostAuthor()
 		}
 	}
 	groupedID, _ := raw.GetGroupedID()
@@ -333,17 +346,20 @@ func stableMessage(raw *tg.Message, chatID, selfID int64) teleboxtelegram.Messag
 	}
 	outgoing := raw.Out || selfID != 0 && senderID == selfID
 	return teleboxtelegram.Message{
-		ID:             raw.ID,
-		ChatID:         chatID,
-		SenderID:       senderID,
-		ReplyToID:      replyToID,
-		Text:           raw.Message,
-		Outgoing:       outgoing,
-		Date:           time.Unix(int64(raw.Date), 0),
-		GroupedID:      groupedID,
-		Media:          mediaMetadataFromMessage(raw),
-		Sticker:        stickerReference(raw),
-		CustomEmojiIDs: customEmojiIDs,
+		ID:              raw.ID,
+		ChatID:          chatID,
+		SenderID:        senderID,
+		ForwardSenderID: forwardSenderID,
+		ForwardName:     forwardName,
+		ReplyToID:       replyToID,
+		ReplyQuote:      replyQuote,
+		Text:            raw.Message,
+		Outgoing:        outgoing,
+		Date:            time.Unix(int64(raw.Date), 0),
+		GroupedID:       groupedID,
+		Media:           mediaMetadataFromMessage(raw),
+		Sticker:         stickerReference(raw),
+		CustomEmojiIDs:  customEmojiIDs,
 	}
 }
 

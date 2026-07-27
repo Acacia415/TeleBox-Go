@@ -78,6 +78,8 @@ func (p *External) Commands() []command.Definition {
 			Name:        specification.Name,
 			Aliases:     append([]string(nil), specification.Aliases...),
 			Description: specification.Description,
+			Usage:       append([]string(nil), specification.Usage...),
+			HelpHTML:    specification.HelpHTML,
 			OwnerOnly:   specification.OwnerOnly,
 			Handler: func(ctx context.Context, request command.Request) error {
 				return p.call(ctx, pluginbridge.MethodPluginHandle, pluginbridge.Invocation{

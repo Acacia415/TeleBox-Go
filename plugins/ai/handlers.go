@@ -67,6 +67,19 @@ func (p *Plugin) handleStatus(ctx context.Context, request command.Request) erro
 			active,
 		))
 	}
+	result.WriteString("\n🎯 各功能实际使用\n")
+	for _, requested := range []feature{
+		featureChat,
+		featureSearch,
+		featureImage,
+		featureTTS,
+	} {
+		value := "无可用服务商"
+		if candidates := p.providerCandidates(ctx, requested); len(candidates) > 0 {
+			value = string(candidates[0])
+		}
+		result.WriteString(string(requested) + "：" + value + "\n")
+	}
 	return p.respond(ctx, request, result.String())
 }
 
@@ -78,21 +91,45 @@ func (p *Plugin) handleSelect(
 	if len(args) != 1 {
 		return p.respond(ctx, request, "❌ 用法：ai select <服务商>")
 	}
-	selected, ok := parseProvider(args[0])
+	requested, ok := parseProvider(args[0])
 	if !ok {
 		return p.respond(ctx, request,
 			"❌ 支持：gemini、openai、claude、deepseek、grok、thirdparty")
 	}
+	selected := requested
+	viaThirdParty := false
+	if p.read(ctx, "key."+string(selected), "") == "" &&
+		selected != providerThirdParty &&
+		p.read(ctx, "key."+string(providerThirdParty), "") != "" {
+		if _, err := p.baseURL(ctx, providerThirdParty); err == nil {
+			selected = providerThirdParty
+			viaThirdParty = true
+		}
+	}
 	if p.read(ctx, "key."+string(selected), "") == "" {
 		return p.respond(ctx, request,
-			"❌ 尚未设置 "+string(selected)+" API Key")
+			"❌ 尚未设置 "+string(requested)+" API Key")
+	}
+	if selected == providerThirdParty {
+		if _, err := p.baseURL(ctx, selected); err != nil {
+			return p.respond(ctx, request, "❌ 第三方 Base URL 未配置")
+		}
+	}
+	if viaThirdParty {
+		if err := p.write(ctx, "thirdparty.compat", string(requested)); err != nil {
+			return p.respond(ctx, request, "❌ 保存第三方兼容协议失败："+err.Error())
+		}
 	}
 	if err := p.write(ctx, "provider", string(selected)); err != nil {
 		return p.respond(ctx, request, "❌ 保存服务商失败："+err.Error())
 	}
-	detail := p.applyDefaultModels(ctx, selected, false)
+	detail := p.autoConfigureModels(ctx, selected, requested, false)
+	label := string(selected)
+	if viaThirdParty {
+		label = "thirdparty（" + string(requested) + " 兼容）"
+	}
 	return p.respond(ctx, request,
-		"✅ 已切换到 "+string(selected)+"\n\n"+detail)
+		"✅ 已切换到 "+label+"\n\n"+detail)
 }
 
 func (p *Plugin) handleAPIKey(
@@ -128,8 +165,9 @@ func (p *Plugin) handleAPIKey(
 	if p.read(ctx, "provider", "") == "" {
 		_ = p.write(ctx, "provider", string(selected))
 	}
+	detail := p.autoConfigureModels(ctx, selected, selected, false)
 	return p.respond(ctx, request,
-		"✅ 已保存 "+string(selected)+" API Key："+maskSecret(key))
+		"✅ 已保存 "+string(selected)+" API Key："+maskSecret(key)+"\n\n"+detail)
 }
 
 func (p *Plugin) handleBaseURL(
@@ -179,8 +217,9 @@ func (p *Plugin) handleThirdParty(
 	if err := p.write(ctx, "thirdparty.compat", string(compat)); err != nil {
 		return p.respond(ctx, request, "❌ 保存兼容协议失败："+err.Error())
 	}
+	detail := p.autoConfigureModels(ctx, providerThirdParty, compat, true)
 	return p.respond(ctx, request,
-		"✅ 第三方接口兼容协议已设为 "+string(compat))
+		"✅ 第三方接口兼容协议已设为 "+string(compat)+"\n\n"+detail)
 }
 
 func (p *Plugin) handleModel(
@@ -209,7 +248,24 @@ func (p *Plugin) handleModel(
 			}
 			result.WriteString(string(requested) + "：" + model + "\n")
 		}
-		return p.respond(ctx, request, result.String())
+		models, err := p.fetchModels(ctx, selected)
+		if err != nil {
+			result.WriteString("\n⚠️ 无法读取上游模型列表：" + friendlyError(err))
+			return p.finishText(ctx, request, result.String(), 0)
+		}
+		sort.Strings(models)
+		result.WriteString(fmt.Sprintf("\n上游可用模型（%d）：\n", len(models)))
+		displayed := models
+		if len(displayed) > 50 {
+			displayed = displayed[:50]
+		}
+		for _, model := range displayed {
+			result.WriteString("• " + model + "\n")
+		}
+		if len(models) > len(displayed) {
+			result.WriteString(fmt.Sprintf("…另有 %d 个模型", len(models)-len(displayed)))
+		}
+		return p.finishText(ctx, request, strings.TrimSpace(result.String()), 0)
 	case "set":
 		if len(args) < 3 {
 			return p.respond(ctx, request,
@@ -247,18 +303,10 @@ func (p *Plugin) handleModel(
 		if len(assigned) == 0 {
 			return p.respond(ctx, request, "❌ 未找到可识别的模型")
 		}
-		var lines []string
-		for requested, model := range assigned {
-			if err := p.write(
-				ctx,
-				"model."+string(selected)+"."+string(requested),
-				model,
-			); err != nil {
-				return p.respond(ctx, request, "❌ 保存模型失败："+err.Error())
-			}
-			lines = append(lines, string(requested)+"："+model)
+		lines, err := p.saveAssignedModels(ctx, selected, assigned)
+		if err != nil {
+			return p.respond(ctx, request, "❌ 保存模型失败："+err.Error())
 		}
-		sort.Strings(lines)
 		return p.respond(ctx, request,
 			"✅ 已自动匹配第三方模型\n\n"+strings.Join(lines, "\n"))
 	default:
@@ -509,9 +557,11 @@ func (p *Plugin) handleTelegraph(
 	if len(args) == 0 {
 		return p.respond(ctx, request,
 			"Telegraph："+p.read(ctx, "telegraph", "off")+
-				"\n长回答在 Go 版本中会自动安全分段发送。")
+				"\n字符限制："+p.read(ctx, "telegraph.limit", "0")+
+				"\n\n用法：ai telegraph <on|off|limit|list|del>")
 	}
-	if strings.EqualFold(args[0], "limit") {
+	switch strings.ToLower(args[0]) {
+	case "limit":
 		if len(args) != 2 {
 			return p.respond(ctx, request, "❌ 用法：ai telegraph limit <字符数>")
 		}
@@ -523,16 +573,49 @@ func (p *Plugin) handleTelegraph(
 			return p.respond(ctx, request, "❌ 保存限制失败："+err.Error())
 		}
 		return p.respond(ctx, request,
-			"✅ Telegraph 字符限制已保存；Go 版本仍优先使用消息分段")
-	}
-	if strings.EqualFold(args[0], "list") {
+			"✅ Telegraph 字符限制已设为 "+strconv.Itoa(limit))
+	case "list":
+		posts := p.telegraphPosts(ctx)
+		if len(posts) == 0 {
+			return p.respond(ctx, request, "尚未创建 Telegraph 文章")
+		}
+		ids := make([]string, 0, len(posts))
+		for id := range posts {
+			ids = append(ids, id)
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(ids)))
+		var result strings.Builder
+		result.WriteString("📄 Telegraph 文章\n\n")
+		for _, id := range ids {
+			item := posts[id]
+			result.WriteString(id + " · " + item.Title + "\n" + item.URL + "\n\n")
+		}
+		return p.finishText(ctx, request, strings.TrimSpace(result.String()), 0)
+	case "del":
+		if len(args) != 2 {
+			return p.respond(ctx, request, "❌ 用法：ai telegraph del <ID|all>")
+		}
+		posts := p.telegraphPosts(ctx)
+		if strings.EqualFold(args[1], "all") {
+			if err := p.saveTelegraphPosts(ctx, map[string]telegraphPost{}); err != nil {
+				return p.respond(ctx, request, "❌ 清除文章记录失败："+err.Error())
+			}
+			return p.respond(ctx, request, "✅ 已清除全部 Telegraph 文章记录")
+		}
+		if _, ok := posts[args[1]]; !ok {
+			return p.respond(ctx, request, "❌ 未找到 Telegraph 文章 "+args[1])
+		}
+		delete(posts, args[1])
+		if err := p.saveTelegraphPosts(ctx, posts); err != nil {
+			return p.respond(ctx, request, "❌ 删除文章记录失败："+err.Error())
+		}
+		return p.respond(ctx, request, "✅ 已删除 Telegraph 文章记录 "+args[1])
+	case "on", "off":
+		return p.handleToggle(ctx, request, "telegraph", args)
+	default:
 		return p.respond(ctx, request,
-			"Go 版本不在 Telegraph 保存访问令牌或页面清单；长回答自动分段发送。")
+			"❌ 用法：ai telegraph <on|off|limit <字符数>|list|del <ID|all>>")
 	}
-	if strings.EqualFold(args[0], "del") {
-		return p.respond(ctx, request, "当前没有本地 Telegraph 页面记录")
-	}
-	return p.handleToggle(ctx, request, "telegraph", args)
 }
 
 func (p *Plugin) handleConfig(
@@ -552,6 +635,8 @@ func (p *Plugin) handleConfig(
 		"collapse",
 		"telegraph",
 		"telegraph.limit",
+		"telegraph.token",
+		"telegraph.posts",
 		"prompts",
 		"prompt.active.chat",
 		"prompt.active.search",
@@ -608,6 +693,66 @@ func (p *Plugin) applyDefaultModels(
 		return "已保留现有模型配置。"
 	}
 	return "已匹配模型：\n" + strings.Join(updated, "\n")
+}
+
+func (p *Plugin) autoConfigureModels(
+	ctx context.Context,
+	selected provider,
+	protocol provider,
+	force bool,
+) string {
+	if selected != providerThirdParty {
+		return p.applyDefaultModels(ctx, selected, force)
+	}
+	if models, err := p.fetchModels(ctx, selected); err == nil {
+		assigned := autoAssignModels(models)
+		if lines, saveErr := p.saveAssignedModels(ctx, selected, assigned); saveErr == nil &&
+			len(lines) > 0 {
+			return "已匹配模型：\n" + strings.Join(lines, "\n")
+		}
+	}
+	defaults := defaultModels[protocol]
+	if len(defaults) == 0 {
+		return "请使用 ai model set 或 ai model auto 配置模型。"
+	}
+	var lines []string
+	for requested, model := range defaults {
+		key := "model." + string(selected) + "." + string(requested)
+		if !force && p.read(ctx, key, "") != "" {
+			continue
+		}
+		if err := p.write(ctx, key, model); err == nil {
+			lines = append(lines, string(requested)+"："+model)
+		}
+	}
+	sort.Strings(lines)
+	if len(lines) == 0 {
+		return "已保留现有模型配置。"
+	}
+	return "已按兼容协议匹配模型：\n" + strings.Join(lines, "\n")
+}
+
+func (p *Plugin) saveAssignedModels(
+	ctx context.Context,
+	selected provider,
+	assigned map[feature]string,
+) ([]string, error) {
+	var lines []string
+	for requested, model := range assigned {
+		if strings.TrimSpace(model) == "" {
+			continue
+		}
+		if err := p.write(
+			ctx,
+			"model."+string(selected)+"."+string(requested),
+			model,
+		); err != nil {
+			return nil, err
+		}
+		lines = append(lines, string(requested)+"："+model)
+	}
+	sort.Strings(lines)
+	return lines, nil
 }
 
 func (p *Plugin) fetchModels(

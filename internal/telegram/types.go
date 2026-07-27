@@ -82,17 +82,20 @@ const (
 )
 
 type Chat struct {
-	ID          int64
-	Title       string
-	Username    string
-	Kind        ChatKind
-	PhotoDC     int
-	MemberCount int
-	CreatedAt   time.Time
-	Verified    bool
-	Scam        bool
-	Fake        bool
-	Forum       bool
+	ID           int64
+	Title        string
+	Username     string
+	Kind         ChatKind
+	PhotoDC      int
+	MemberCount  int
+	LinkedChatID int64
+	InviteLink   string
+	Description  string
+	CreatedAt    time.Time
+	Verified     bool
+	Scam         bool
+	Fake         bool
+	Forum        bool
 }
 
 type ChatPermissions struct {
@@ -110,6 +113,7 @@ type HistoryQuery struct {
 	Search     string
 	FromUserID int64
 	MediaKind  MediaKind
+	ReplyToID  int
 }
 
 type ModerationAction string
@@ -172,17 +176,20 @@ type BotMediaRequest struct {
 }
 
 type Message struct {
-	ID             int
-	ChatID         int64
-	SenderID       int64
-	ReplyToID      int
-	Text           string
-	Outgoing       bool
-	Date           time.Time
-	GroupedID      int64
-	Media          *Media
-	Sticker        *Sticker
-	CustomEmojiIDs []int64
+	ID              int
+	ChatID          int64
+	SenderID        int64
+	ForwardSenderID int64
+	ForwardName     string
+	ReplyToID       int
+	ReplyQuote      string
+	Text            string
+	Outgoing        bool
+	Date            time.Time
+	GroupedID       int64
+	Media           *Media
+	Sticker         *Sticker
+	CustomEmojiIDs  []int64
 }
 
 type SentMessage struct {

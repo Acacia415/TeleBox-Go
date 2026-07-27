@@ -11,7 +11,7 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 - [x] 配置、日志、命令路由和所有者权限
 - [x] `gotd/td` 会话、QR/手机号登录、更新补洞和 peer 解析
 - [x] SQLite 存储、迁移器、任务调度和统一关闭流程
-- [x] 全量备份中的 27 个插件全部完成 Go 移植
+- [x] 全量备份中保留的 25 个插件完成原版功能对照与 Go 移植
 - [x] 可校验的插件目录、按平台安装和独立进程运行
 - [x] Linux amd64/arm64 一键安装与 systemd 用户服务
 - [x] GitHub Release SHA-256 校验与 Telegram 内框架自更新
@@ -24,11 +24,12 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
   `jointime`、`rate`、`search`、`trace`
 - 消息与管理：`aban`、`bulk_delete`、`cezi`、`re`
 - 媒体与贴纸：`eat`、`eatgif`、`gif`、`nsticker`、`yvlu`、`zhijiao`
-- AI 与音乐：`ai`、`music_bot`、`yt-dlp`
-- 系统与备份：`speedlink`、`speedtest`、`telegram-backup`
+- AI 与下载：`ai`、`yt-dlp`
+- 系统与备份：`speedlink`、`telegram-backup`
 
 详细安装、登录、命令和更新说明见 [使用手册](docs/user-guide.md)，完整
-开发进度见 [重构计划](docs/refactor-plan.md)。
+开发进度见 [重构计划](docs/refactor-plan.md)，逐项功能核对见
+[原版功能对照表](docs/plugin-parity.md)。
 
 ## Linux 一键安装
 
@@ -101,13 +102,17 @@ Copy-Item config.example.json config.json
 `p`、`t`，并保留 `plugins`、`plugin` 兼容别名：
 
 ```text
--p ls                 查看已安装插件
+-p ls [-v]            查看已安装插件（可显示详情）
 -p s [关键词]         搜索插件
--p i bin              安装并启用插件
+-p i bin ip           安装并启用一个或多个插件
+-p i                  回复已编译插件包后本地安装
 -p i all              安装全部官方插件
--p i bin@0.1.0        安装指定版本
+-p i bin@0.2.0        安装指定版本
 -p u [插件名]         更新一个或全部插件
--p rm bin             停用并卸载插件
+-p ua                 更新全部插件
+-p rm bin ip          停用并卸载一个或多个插件
+-p rm all             卸载全部业务插件
+-p upload bin         导出当前平台的已安装插件包
 -p on bin             启用插件
 -p off bin            停用插件
 -p doctor             检查插件目录
@@ -122,11 +127,26 @@ Copy-Item config.example.json config.json
 -prefix remove .
 ```
 
+旧版自定义命令别名也会迁移；运行时可以继续管理：
+
+```text
+-alias set de bd
+-alias set t p
+-alias ls
+-alias del de
+```
+
 主程序初次安装不携带业务插件。通过 `-p i` 下载的压缩包会经过 HTTPS、
 大小限制和 SHA-256 校验，再安装到配置的插件目录。每个插件运行在独立
 子进程中；一个插件退出不会带崩 TeleBox，下一次调用会自动重新启动它。
 
-`yt-dlp`、音视频转换和测速等插件仍需要系统中存在相应的上游命令行工具。
+`yt-dlp` 可以通过 `-yt setup` 自动安装并校验上游程序，通过
+`-yt doctor` 检查 Deno、FFmpeg、Cookies 和代理。音视频转换等插件仍需要
+系统中存在相应的上游命令行工具。
+
+框架备份可直接在 Telegram 中完成。`-bf` 备份插件与运行数据，`-bf all`
+另外包含 JSON 配置；回复备份文件发送 `-hf` 会先完整校验，重启后再恢复。
+登录会话、日志和主程序不会写入备份。
 
 ## 项目目录
 

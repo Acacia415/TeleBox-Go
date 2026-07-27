@@ -22,7 +22,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "dc",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "查询用户、群组或频道头像所在数据中心",
 	}
 }
@@ -31,8 +31,13 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "dc",
 		Description: "查询头像 DC",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"dc",
+			"dc <@用户名|用户ID>",
+			"dc（回复目标消息）",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 

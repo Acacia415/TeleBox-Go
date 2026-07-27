@@ -86,3 +86,22 @@ func TestConvertLegacyHistory(t *testing.T) {
 		t.Fatalf("history = %#v", history)
 	}
 }
+
+func TestTelegraphNodesPreserveParagraphsAndLineBreaks(t *testing.T) {
+	nodes := telegraphNodes("第一行\n第二行\n\n下一段")
+	if len(nodes) != 2 {
+		t.Fatalf("nodes = %#v", nodes)
+	}
+	children, ok := nodes[0]["children"].([]any)
+	if !ok || len(children) != 3 {
+		t.Fatalf("first paragraph = %#v", nodes[0])
+	}
+}
+
+func TestVoiceCompatibility(t *testing.T) {
+	if !voiceCompatible("Kore", providerGemini) ||
+		voiceCompatible("alloy", providerGemini) ||
+		!voiceCompatible("alloy", providerOpenAI) {
+		t.Fatal("voice compatibility matrix is incorrect")
+	}
+}

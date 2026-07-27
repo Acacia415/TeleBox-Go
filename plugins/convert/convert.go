@@ -17,8 +17,10 @@ import (
 
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
+	"github.com/Acacia415/TeleBox-Go/internal/legacyconfig"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
+	"github.com/Acacia415/TeleBox-Go/internal/storage"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
 	"github.com/Acacia415/TeleBox-Go/internal/toolrunner"
 )
@@ -50,7 +52,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "convert",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "将回复的视频或媒体文件转换为 MP3",
 	}
 }
@@ -59,16 +61,23 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "convert",
 		Description: "使用 FFmpeg 转换音轨，可选 Gemini 元数据",
-		OwnerOnly:   true,
-		Handler:     p.handle,
+		Usage: []string{
+			"convert [输出文件名]（回复媒体）",
+			"convert u <歌曲名>（回复媒体）",
+			"convert apikey <Gemini API Key>|clear",
+			"convert model <模型名>",
+			"convert clear",
+		},
+		OwnerOnly: true,
+		Handler:   p.handle,
 	}}
 }
 
-func (p *Plugin) Start(context.Context) error {
+func (p *Plugin) Start(ctx context.Context) error {
 	if err := os.MkdirAll(p.workDir, 0o700); err != nil {
 		return fmt.Errorf("create convert work directory: %w", err)
 	}
-	return nil
+	return p.migrateLegacyConfig(ctx)
 }
 
 func (p *Plugin) Stop(context.Context) error { return nil }
@@ -505,6 +514,32 @@ func (p *Plugin) readConfig(ctx context.Context, key string) (string, error) {
 
 func (p *Plugin) writeConfig(ctx context.Context, key, value string) error {
 	return p.services.Storage.Put(ctx, "convert", key, []byte(value))
+}
+
+func (p *Plugin) migrateLegacyConfig(ctx context.Context) error {
+	if p.services.AssetsDir == "" {
+		return nil
+	}
+	values, err := legacyconfig.ReadSQLiteConfig(
+		filepath.Join(p.services.AssetsDir, "convert", "gemini_config.db"),
+	)
+	if err != nil {
+		return err
+	}
+	value := strings.TrimSpace(values["convert_gemini_api_key"])
+	if value == "" {
+		return nil
+	}
+	if _, err := p.services.Storage.Get(ctx, "convert", "api_key"); err == nil {
+		return nil
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	if err := p.writeConfig(ctx, "api_key", value); err != nil {
+		return err
+	}
+	p.services.Logger.Info("migrated legacy convert config", "keys", 1)
+	return nil
 }
 
 func (p *Plugin) respond(ctx context.Context, request command.Request, text string) error {

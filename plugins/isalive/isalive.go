@@ -27,7 +27,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "isalive",
-		Version:     "0.1.0",
+		Version:     "0.2.0",
 		Description: "查询 Telegram 用户最后上线状态",
 	}
 }
@@ -37,6 +37,7 @@ func (p *Plugin) Commands() []command.Definition {
 		{
 			Name:        "isalive",
 			Description: "查询用户名或 UID 的最后上线状态",
+			Usage:       []string{"isalive <@用户名|用户ID>"},
 			OwnerOnly:   true,
 			Handler:     p.handle,
 		},
