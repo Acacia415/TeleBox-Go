@@ -19,6 +19,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/buildinfo"
 	"github.com/Acacia415/TeleBox-Go/internal/config"
 	gotdclient "github.com/Acacia415/TeleBox-Go/internal/telegram/gotd"
+	"golang.org/x/term"
 	"rsc.io/qr"
 )
 
@@ -32,6 +33,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	configPath := flags.String("config", "config.json", "path to TeleBox JSON config")
 	checkConfig := flags.Bool("check-config", false, "validate configuration and exit")
 	showVersion := flags.Bool("version", false, "print version and exit")
+	loginOnly := flags.Bool("login", false, "log in to Telegram and exit")
+	loginMode := flags.String("login-mode", "", "login method used with -login: qr or phone")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -56,8 +59,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "configuration is valid")
 		return 0
 	}
+	if value := strings.ToLower(strings.TrimSpace(*loginMode)); value != "" {
+		switch value {
+		case "qr", "phone":
+			cfg.Telegram.LoginMode = value
+		default:
+			fmt.Fprintln(stderr, "login mode must be qr or phone")
+			return 2
+		}
+	}
 
 	logger := newLogger(stderr, cfg.Logging)
+	var phoneAuth *terminalAuthenticator
+	if strings.EqualFold(cfg.Telegram.LoginMode, "phone") {
+		phoneAuth = newTerminalAuthenticator(os.Stdin, stderr)
+	}
 	client, err := gotdclient.New(gotdclient.Config{
 		APIID:       cfg.Telegram.APIID,
 		APIHash:     cfg.Telegram.APIHash,
@@ -66,6 +82,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		OnQRCode: func(_ context.Context, code gotdclient.QRCode) error {
 			return showLoginQRCode(stderr, cfg.Telegram.SessionFile, code)
 		},
+		PhoneAuth: phoneAuth,
 	})
 	if err != nil {
 		logger.Error("initialize Telegram client", "error", err)
@@ -73,6 +90,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *loginOnly {
+		if err := client.Login(ctx); err != nil {
+			logger.Error("Telegram login failed", "error", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Telegram 登录成功，会话已保存。")
+		return 0
+	}
 	application, err := app.New(ctx, cfg, logger, client)
 	if err != nil {
 		logger.Error("initialize TeleBox", "error", err)
@@ -103,16 +128,46 @@ func showLoginQRCode(stderr io.Writer, sessionFile string, code gotdclient.QRCod
 	if err != nil {
 		absolutePath = qrPath
 	}
-	fmt.Fprintf(stderr, "Scan the Telegram login QR image before %s:\n%s\n",
+	fmt.Fprintf(stderr, "请在 %s 前扫描 Telegram 登录二维码。\n二维码图片：%s\n",
 		code.ExpiresAt.Local().Format(time.RFC3339),
 		absolutePath,
 	)
+	if output, ok := stderr.(*os.File); ok && term.IsTerminal(int(output.Fd())) {
+		fmt.Fprintln(stderr, "请使用 Telegram 扫描下方二维码：")
+		renderTerminalQRCode(stderr, loginQR)
+	}
 	if runtime.GOOS == "windows" {
 		if err := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", absolutePath).Start(); err != nil {
-			fmt.Fprintf(stderr, "Could not open the QR image automatically: %v\n", err)
+			fmt.Fprintf(stderr, "无法自动打开二维码图片：%v\n", err)
 		}
 	}
 	return nil
+}
+
+func renderTerminalQRCode(output io.Writer, code *qr.Code) {
+	const quietZone = 4
+	size := code.Size
+	for y := -quietZone; y < size+quietZone; y += 2 {
+		fmt.Fprint(output, "\x1b[30;47m")
+		for x := -quietZone; x < size+quietZone; x++ {
+			top := x >= 0 && x < size && y >= 0 && y < size && code.Black(x, y)
+			bottomY := y + 1
+			bottom := x >= 0 && x < size &&
+				bottomY >= 0 && bottomY < size &&
+				code.Black(x, bottomY)
+			switch {
+			case top && bottom:
+				fmt.Fprint(output, "█")
+			case top:
+				fmt.Fprint(output, "▀")
+			case bottom:
+				fmt.Fprint(output, "▄")
+			default:
+				fmt.Fprint(output, " ")
+			}
+		}
+		fmt.Fprintln(output, "\x1b[0m")
+	}
 }
 
 func newLogger(output io.Writer, cfg config.LoggingConfig) *slog.Logger {

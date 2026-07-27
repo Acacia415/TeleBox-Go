@@ -1,13 +1,47 @@
 package gotd
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
 
 	teleboxtelegram "github.com/Acacia415/TeleBox-Go/internal/telegram"
 )
+
+func TestNewRequiresAuthenticatorForPhoneLogin(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{
+		APIID:       1,
+		APIHash:     "hash",
+		SessionFile: t.TempDir() + "/session.json",
+		LoginMode:   "phone",
+	})
+	if err == nil ||
+		err.Error() != "phone login requested but no phone authenticator is configured" {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = New(Config{
+		APIID:       1,
+		APIHash:     "hash",
+		SessionFile: t.TempDir() + "/session.json",
+		LoginMode:   "phone",
+		PhoneAuth: auth.Constant(
+			"+8613812345678",
+			"password",
+			auth.CodeAuthenticatorFunc(func(context.Context, *tg.AuthSentCode) (string, error) {
+				return "12345", nil
+			}),
+		),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+}
 
 func TestPeerIDUsesTDLibConvention(t *testing.T) {
 	t.Parallel()

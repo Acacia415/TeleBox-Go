@@ -13,6 +13,7 @@ import (
 	"github.com/gotd/td/constant"
 	"github.com/gotd/td/session"
 	gotdtelegram "github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/telegram/message"
 	messagehtml "github.com/gotd/td/telegram/message/html"
@@ -36,6 +37,7 @@ type Config struct {
 	SessionFile string
 	LoginMode   string
 	OnQRCode    func(context.Context, QRCode) error
+	PhoneAuth   auth.UserAuthenticator
 }
 
 type Client struct {
@@ -67,6 +69,10 @@ func New(cfg Config) (*Client, error) {
 	}
 	switch strings.ToLower(cfg.LoginMode) {
 	case "existing", "qr":
+	case "phone":
+		if cfg.PhoneAuth == nil {
+			return nil, errors.New("phone login requested but no phone authenticator is configured")
+		}
 	default:
 		return nil, fmt.Errorf("unsupported login mode %q", cfg.LoginMode)
 	}
@@ -139,17 +145,8 @@ func (c *Client) Run(ctx context.Context, handler teleboxtelegram.MessageHandler
 	}()
 
 	return c.raw.Run(ctx, func(runCtx context.Context) error {
-		status, err := c.raw.Auth().Status(runCtx)
-		if err != nil {
-			return fmt.Errorf("check Telegram authorization: %w", err)
-		}
-		if !status.Authorized {
-			if !strings.EqualFold(c.config.LoginMode, "qr") {
-				return fmt.Errorf("%w: run with telegram.login_mode set to %q", teleboxtelegram.ErrNotAuthorized, "qr")
-			}
-			if err := c.authorizeQR(runCtx); err != nil {
-				return err
-			}
+		if err := c.ensureAuthorized(runCtx); err != nil {
+			return err
 		}
 
 		if err := c.peers.Init(runCtx); err != nil {
@@ -172,6 +169,37 @@ func (c *Client) Run(ctx context.Context, handler teleboxtelegram.MessageHandler
 	})
 }
 
+// Login performs the configured interactive authorization flow and exits as
+// soon as gotd has persisted the session. It does not start update processing.
+func (c *Client) Login(ctx context.Context) error {
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
+
+	return c.raw.Run(ctx, c.ensureAuthorized)
+}
+
+func (c *Client) ensureAuthorized(ctx context.Context) error {
+	status, err := c.raw.Auth().Status(ctx)
+	if err != nil {
+		return fmt.Errorf("check Telegram authorization: %w", err)
+	}
+	if status.Authorized {
+		return nil
+	}
+
+	switch strings.ToLower(c.config.LoginMode) {
+	case "qr":
+		return c.authorizeQR(ctx)
+	case "phone":
+		return c.authorizePhone(ctx)
+	default:
+		return fmt.Errorf(
+			"%w: run telebox with -login and choose qr or phone login",
+			teleboxtelegram.ErrNotAuthorized,
+		)
+	}
+}
+
 func (c *Client) authorizeQR(ctx context.Context) error {
 	if c.config.OnQRCode == nil {
 		return errors.New("QR login requested but no QR callback is configured")
@@ -184,6 +212,14 @@ func (c *Client) authorizeQR(ctx context.Context) error {
 	})
 	if err != nil {
 		return fmt.Errorf("Telegram QR login: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) authorizePhone(ctx context.Context) error {
+	flow := auth.NewFlow(c.config.PhoneAuth, auth.SendCodeOptions{})
+	if err := c.raw.Auth().IfNecessary(ctx, flow); err != nil {
+		return fmt.Errorf("Telegram phone login: %w", err)
 	}
 	return nil
 }

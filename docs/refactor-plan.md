@@ -6,7 +6,7 @@
 ## 第一阶段：整体框架
 
 - [x] Go module、目录结构、配置和结构化日志
-- [x] `gotd/td` MTProto 会话、QR 登录、更新同步和 peer 解析
+- [x] `gotd/td` MTProto 会话、QR/手机号交互登录、更新同步和 peer 解析
 - [x] 稳定的 Telegram 消息、媒体、用户查询接口
 - [x] 命令路由、owner 权限、动态前缀和发送者限流
 - [x] 有界任务队列、panic 隔离和插件生命周期
