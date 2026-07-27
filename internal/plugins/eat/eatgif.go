@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -538,18 +539,19 @@ func (p *GIFPlugin) respond(
 
 func safeRelativePath(value string) (string, error) {
 	value = strings.TrimSpace(value)
-	if value == "" || strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\`) {
+	normalized := strings.ReplaceAll(value, `\`, "/")
+	if normalized == "" || path.IsAbs(normalized) {
 		return "", errors.New("路径为空或为绝对路径")
 	}
-	value = strings.ReplaceAll(value, "/", string(filepath.Separator))
-	if filepath.IsAbs(value) || filepath.VolumeName(value) != "" {
+	firstSegment := strings.SplitN(normalized, "/", 2)[0]
+	if strings.Contains(firstSegment, ":") {
 		return "", errors.New("路径为空或为绝对路径")
 	}
-	clean := filepath.Clean(value)
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	clean := path.Clean(normalized)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", errors.New("路径越界")
 	}
-	return clean, nil
+	return filepath.FromSlash(clean), nil
 }
 
 func isPathInside(root, candidate string) bool {

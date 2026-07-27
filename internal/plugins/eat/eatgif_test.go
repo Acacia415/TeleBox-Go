@@ -13,7 +13,14 @@ func TestSafeRelativePath(t *testing.T) {
 	if got != filepath.Join("dr", "dr1.png") {
 		t.Fatalf("safe path = %q", got)
 	}
-	for _, value := range []string{"../secret", "/absolute", `..\secret`} {
+	for _, value := range []string{
+		"../secret",
+		"/absolute",
+		`..\secret`,
+		`C:\secret`,
+		`\\server\share`,
+		".",
+	} {
 		if _, err := safeRelativePath(value); err == nil {
 			t.Fatalf("unsafe path %q was accepted", value)
 		}
