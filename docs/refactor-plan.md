@@ -50,6 +50,7 @@
 - [x] HTTPS、SHA-256 和安全解包安装器
 - [x] monorepo 插件 SDK 与跨平台目录生成
 - [x] Linux amd64/arm64 一键安装脚本
+- [x] Telegram 内检查/更新框架、SHA-256 校验和自动重启
 - [ ] Linux 隔离账号逐插件端到端验收
 - [x] `trace`
 - [x] `yt-dlp`

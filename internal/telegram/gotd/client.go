@@ -23,6 +23,7 @@ import (
 	updatehook "github.com/gotd/td/telegram/updates/hook"
 	"github.com/gotd/td/tg"
 
+	"github.com/Acacia415/TeleBox-Go/internal/buildinfo"
 	teleboxtelegram "github.com/Acacia415/TeleBox-Go/internal/telegram"
 )
 
@@ -114,7 +115,7 @@ func New(cfg Config) (*Client, error) {
 		Device: gotdtelegram.DeviceConfig{
 			DeviceModel:    "TeleBox-Go",
 			SystemVersion:  "Go",
-			AppVersion:     "0.1.0",
+			AppVersion:     deviceAppVersion(buildinfo.Version),
 			SystemLangCode: "en",
 			LangCode:       "en",
 		},
@@ -122,6 +123,14 @@ func New(cfg Config) (*Client, error) {
 	client.peers = (peers.Options{}).Build(client.raw.API())
 	updateHandler = client.peers.UpdateHook(client.updates)
 	return client, nil
+}
+
+func deviceAppVersion(version string) string {
+	version = strings.TrimSpace(strings.TrimPrefix(version, "v"))
+	if version == "" {
+		return "dev"
+	}
+	return version
 }
 
 func (c *Client) Run(ctx context.Context, handler teleboxtelegram.MessageHandler) error {

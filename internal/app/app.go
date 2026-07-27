@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Acacia415/TeleBox-Go/internal/buildinfo"
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/config"
 	"github.com/Acacia415/TeleBox-Go/internal/dispatch"
@@ -21,6 +22,7 @@ import (
 	coreplugin "github.com/Acacia415/TeleBox-Go/internal/plugins/core"
 	"github.com/Acacia415/TeleBox-Go/internal/ratelimit"
 	"github.com/Acacia415/TeleBox-Go/internal/scheduler"
+	"github.com/Acacia415/TeleBox-Go/internal/selfupdate"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/storage"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
@@ -38,7 +40,13 @@ type App struct {
 	services service.Container
 }
 
-func New(ctx context.Context, cfg config.Config, logger *slog.Logger, client telegram.Client) (*App, error) {
+func New(
+	ctx context.Context,
+	cfg config.Config,
+	logger *slog.Logger,
+	client telegram.Client,
+	restart func(),
+) (*App, error) {
 	if logger == nil {
 		return nil, errors.New("logger is required")
 	}
@@ -87,6 +95,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger, client tel
 		Scheduler: jobScheduler,
 		AssetsDir: cfg.Storage.AssetsPath,
 		HTTP:      httpClient,
+		Restart:   restart,
 	}
 	market, err := pluginmarket.New(pluginmarket.Config{
 		Directory:       cfg.Plugins.Directory,
@@ -109,7 +118,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger, client tel
 		_ = store.Close()
 		return nil, fmt.Errorf("create plugin controller: %w", err)
 	}
-	core := coreplugin.New(services, router, registry, packages)
+	core := coreplugin.New(
+		services,
+		router,
+		registry,
+		packages,
+		selfupdate.New(buildinfo.Version),
+	)
 	if err := registry.Add(core); err != nil {
 		httpClient.Close()
 		_ = store.Close()

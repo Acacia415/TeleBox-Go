@@ -186,7 +186,7 @@ if [ "$PERFORM_LOGIN" -eq 1 ]; then
     else
         while :; do
             if [ -n "$API_ID" ]; then
-                prompt_line "请输入 Telegram API ID [${API_ID}]："
+                prompt_line "已检测到 Telegram API ID，直接回车保留，或输入新值："
                 [ -n "$REPLY" ] && API_ID="$REPLY"
             else
                 prompt_line "请输入 Telegram API ID："

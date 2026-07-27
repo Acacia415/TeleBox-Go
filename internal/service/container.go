@@ -50,4 +50,5 @@ type Container struct {
 	Scheduler Scheduler
 	AssetsDir string
 	HTTP      HTTPClient
+	Restart   func()
 }
