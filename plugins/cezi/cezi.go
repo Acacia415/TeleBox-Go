@@ -56,7 +56,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "cezi",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "使用 Groq 生产模型进行测字解签",
 	}
 }

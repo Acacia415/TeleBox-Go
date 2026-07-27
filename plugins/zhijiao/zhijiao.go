@@ -64,7 +64,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "zhijiao",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "使用廿七句杯卦卦辞掷筊",
 	}
 }

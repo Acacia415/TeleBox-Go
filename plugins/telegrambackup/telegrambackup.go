@@ -48,7 +48,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "telegram-backup",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "备份私聊消息元数据以及群组、频道链接并导出安全 ZIP",
 	}
 }

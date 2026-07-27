@@ -26,7 +26,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "bulk_delete",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "批量删除范围消息或自己最近的消息",
 	}
 }

@@ -16,7 +16,8 @@
   },
   "storage": {
     "path": "data/telebox.db",
-    "assets_path": "data/assets"
+    "assets_path": "data/assets",
+    "legacy_assets_path": "data/legacy-assets"
   },
   "tools": {
     "max_concurrent": 4

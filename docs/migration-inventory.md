@@ -1,43 +1,7 @@
-# 备份迁移清单
+# 备份迁移说明
 
-来源：
-
-`telebox_backup_20260726_054103_70aa79a0.tar.gz`
-
-## 迁移插件
-
-当前迁移范围共 25 个：
-
-```text
-aban
-ai
-bin
-bulk_delete
-cezi
-convert
-dc
-dig
-eat
-eatgif
-gif
-ids
-ip
-isalive
-jointime
-nsticker
-rate
-re
-search
-speedlink
-telegram-backup
-trace
-yt-dlp
-yvlu
-zhijiao
-```
-
-这些插件均已加入 monorepo 的 `plugins/` 源码目录；它们不编译进主程序，
-而是由插件 SDK 生成独立安装包。
+Go 版支持的官方插件均位于 monorepo 的 `plugins/` 源码目录；它们不编译进
+主程序，而是由插件 SDK 生成独立安装包。
 详细功能分支见 [原版功能对照表](plugin-parity.md)。
 
 ## 已发现的数据
@@ -57,5 +21,7 @@ zhijiao
 - SpeedLink：迁移旧密钥/数据库，密码重新使用 AES-256-GCM 保存。
 - Telegram Backup：直接兼容旧 `telegram_backup.db` 表结构，并可恢复
   旧版 `backup.json`、单备份 ZIP 和批量 ZIP。
-- eat/eatgif、yt-dlp 等资产仍由迁移器按插件白名单复制。
+- 当前 Go 插件支持的资产由迁移器复制到活动资源目录。
+- 备份内全部旧插件资产同时以不可执行权限保存到隔离目录，并生成逐文件
+  SHA-256 清单；暂不支持的插件不会加载或执行。
 - 旧 `alias`、`sudo`、`sure` 数据会兼容导入到 Go 版持久化存储。

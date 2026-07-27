@@ -56,7 +56,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "search",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "多频道视频资源搜索、随机速览与广告过滤",
 	}
 }

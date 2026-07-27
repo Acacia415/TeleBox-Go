@@ -30,7 +30,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "ids",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "查询用户、对话、消息及实体的详细信息",
 	}
 }

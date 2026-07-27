@@ -28,7 +28,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "nsticker",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "将回复的静态、动态或视频贴纸收藏到自己的贴纸包",
 	}
 }

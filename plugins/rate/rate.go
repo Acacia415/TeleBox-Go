@@ -60,7 +60,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "rate",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "法币与主流加密货币汇率查询",
 	}
 }

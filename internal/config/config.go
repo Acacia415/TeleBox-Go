@@ -43,8 +43,9 @@ type CommandConfig struct {
 }
 
 type StorageConfig struct {
-	Path       string `json:"path"`
-	AssetsPath string `json:"assets_path"`
+	Path             string `json:"path"`
+	AssetsPath       string `json:"assets_path"`
+	LegacyAssetsPath string `json:"legacy_assets_path"`
 }
 
 type ToolConfig struct {
@@ -85,8 +86,9 @@ func Default() Config {
 			PerSenderIntervalMS: 250,
 		},
 		Storage: StorageConfig{
-			Path:       "data/telebox.db",
-			AssetsPath: "data/assets",
+			Path:             "data/telebox.db",
+			AssetsPath:       "data/assets",
+			LegacyAssetsPath: "data/legacy-assets",
 		},
 		Tools: ToolConfig{
 			MaxConcurrent: 4,
@@ -174,6 +176,12 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Storage.AssetsPath) == "" {
 		problems = append(problems, "storage.assets_path is required")
 	}
+	if strings.TrimSpace(c.Storage.LegacyAssetsPath) == "" {
+		problems = append(problems, "storage.legacy_assets_path is required")
+	}
+	if pathsOverlap(c.Storage.AssetsPath, c.Storage.LegacyAssetsPath) {
+		problems = append(problems, "storage.assets_path and storage.legacy_assets_path must not overlap")
+	}
 	if c.Tools.MaxConcurrent <= 0 {
 		problems = append(problems, "tools.max_concurrent must be greater than zero")
 	}
@@ -251,6 +259,7 @@ func (c *Config) resolvePaths(baseDir string) {
 	c.Telegram.SessionFile = resolvePath(baseDir, c.Telegram.SessionFile)
 	c.Storage.Path = resolvePath(baseDir, c.Storage.Path)
 	c.Storage.AssetsPath = resolvePath(baseDir, c.Storage.AssetsPath)
+	c.Storage.LegacyAssetsPath = resolvePath(baseDir, c.Storage.LegacyAssetsPath)
 	c.Plugins.Directory = resolvePath(baseDir, c.Plugins.Directory)
 	c.Logging.Path = resolvePath(baseDir, c.Logging.Path)
 }
@@ -260,6 +269,22 @@ func resolvePath(baseDir, path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(filepath.Join(baseDir, path))
+}
+
+func pathsOverlap(first, second string) bool {
+	return pathContains(first, second) || pathContains(second, first)
+}
+
+func pathContains(parent, child string) bool {
+	parent, parentErr := filepath.Abs(parent)
+	child, childErr := filepath.Abs(child)
+	if parentErr != nil || childErr != nil {
+		return strings.EqualFold(filepath.Clean(parent), filepath.Clean(child))
+	}
+	relative, err := filepath.Rel(parent, child)
+	return err == nil &&
+		(relative == "." ||
+			(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))))
 }
 
 func applyEnvironment(cfg *Config) error {
@@ -281,6 +306,9 @@ func applyEnvironment(cfg *Config) error {
 	}
 	if value, ok := os.LookupEnv("TELEBOX_ASSETS_PATH"); ok {
 		cfg.Storage.AssetsPath = value
+	}
+	if value, ok := os.LookupEnv("TELEBOX_LEGACY_ASSETS_PATH"); ok {
+		cfg.Storage.LegacyAssetsPath = value
 	}
 	if value, ok := os.LookupEnv("TELEBOX_PLUGIN_DIR"); ok {
 		cfg.Plugins.Directory = value

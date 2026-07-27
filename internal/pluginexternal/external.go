@@ -133,10 +133,19 @@ func (p *External) Stop(ctx context.Context) error {
 	p.stdin = nil
 	p.done = nil
 	p.mu.Unlock()
+	if errors.Is(stopErr, pluginrpc.ErrClosed) {
+		stopErr = nil
+	}
 	if exitIsExpected(waitErr) {
 		waitErr = nil
 	}
-	return errors.Join(stopErr, waitErr)
+	// Once shutdown has been requested, the process exit status is not an
+	// application failure. systemd may signal the whole service cgroup before
+	// the parent finishes the RPC stop handshake.
+	if waitErr != nil {
+		p.logger.Debug("plugin process exited during shutdown", "error", waitErr)
+	}
+	return stopErr
 }
 
 func (p *External) OnMessage(
@@ -204,6 +213,7 @@ func (p *External) startLocked(ctx context.Context) error {
 		p.installed.Manifest.Name,
 		p.workDir,
 		p.services.AssetsDir,
+		p.services.LegacyAssetsDir,
 	)
 	stdin, err := process.StdinPipe()
 	if err != nil {
@@ -254,8 +264,8 @@ func (p *External) startLocked(ctx context.Context) error {
 	return nil
 }
 
-func pluginEnvironment(name, workDir, assetsDir string) []string {
-	result := make([]string, 0, len(os.Environ())+3)
+func pluginEnvironment(name, workDir, assetsDir, legacyAssetsDir string) []string {
+	result := make([]string, 0, len(os.Environ())+4)
 	for _, item := range os.Environ() {
 		key := item
 		if index := strings.IndexByte(item, '='); index >= 0 {
@@ -271,6 +281,7 @@ func pluginEnvironment(name, workDir, assetsDir string) []string {
 		"TELEBOX_PLUGIN_NAME="+name,
 		"TELEBOX_PLUGIN_WORKDIR="+workDir,
 		"TELEBOX_PLUGIN_ASSETS_DIR="+assetsDir,
+		"TELEBOX_PLUGIN_LEGACY_ASSETS_DIR="+legacyAssetsDir,
 	)
 	return result
 }

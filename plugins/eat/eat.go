@@ -88,7 +88,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "将用户头像或回复图片合成到静态表情模板",
 	}
 }

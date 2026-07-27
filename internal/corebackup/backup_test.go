@@ -20,13 +20,15 @@ func (f fakeStorage) Backup(_ context.Context, destination string) error {
 func TestCreateValidateStageAndApply(t *testing.T) {
 	root := t.TempDir()
 	paths := Paths{
-		Config:  filepath.Join(root, "config.json"),
-		Storage: filepath.Join(root, "data", "telebox.db"),
-		Assets:  filepath.Join(root, "data", "assets"),
-		Plugins: filepath.Join(root, "data", "plugins"),
+		Config:       filepath.Join(root, "config.json"),
+		Storage:      filepath.Join(root, "data", "telebox.db"),
+		Assets:       filepath.Join(root, "data", "assets"),
+		LegacyAssets: filepath.Join(root, "data", "legacy-assets"),
+		Plugins:      filepath.Join(root, "data", "plugins"),
 	}
 	writeTestFile(t, paths.Config, "backup-config")
 	writeTestFile(t, filepath.Join(paths.Assets, "alias", "alias.db"), "backup-alias")
+	writeTestFile(t, filepath.Join(paths.LegacyAssets, "old", "cache.db"), "backup-legacy")
 	writeTestFile(t, filepath.Join(paths.Plugins, "ids", "plugin.json"), "backup-plugin")
 	writeTestFile(t, paths.Storage, "current-storage")
 
@@ -41,7 +43,7 @@ func TestCreateValidateStageAndApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manifest.Full || len(manifest.Files) != 4 {
+	if !manifest.Full || len(manifest.Files) != 5 {
 		t.Fatalf("unexpected manifest: %#v", manifest)
 	}
 	if _, err := Validate(archive); err != nil {
@@ -51,6 +53,7 @@ func TestCreateValidateStageAndApply(t *testing.T) {
 	writeTestFile(t, paths.Config, "new-config")
 	writeTestFile(t, paths.Storage, "new-storage")
 	writeTestFile(t, filepath.Join(paths.Assets, "alias", "alias.db"), "new-alias")
+	writeTestFile(t, filepath.Join(paths.LegacyAssets, "old", "cache.db"), "new-legacy")
 	if _, _, err := Stage(archive, paths); err != nil {
 		t.Fatal(err)
 	}
@@ -64,8 +67,10 @@ func TestCreateValidateStageAndApply(t *testing.T) {
 	assertTestFile(t, paths.Config, "backup-config")
 	assertTestFile(t, paths.Storage, "backup-storage")
 	assertTestFile(t, filepath.Join(paths.Assets, "alias", "alias.db"), "backup-alias")
+	assertTestFile(t, filepath.Join(paths.LegacyAssets, "old", "cache.db"), "backup-legacy")
 	assertTestFile(t, filepath.Join(result.RollbackDir, "config.json"), "new-config")
 	assertTestFile(t, filepath.Join(result.RollbackDir, "telebox.db"), "new-storage")
+	assertTestFile(t, filepath.Join(result.RollbackDir, "legacy-assets", "old", "cache.db"), "new-legacy")
 }
 
 func TestValidateRejectsPathTraversal(t *testing.T) {

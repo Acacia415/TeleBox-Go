@@ -77,7 +77,7 @@ func NewGIF(services service.Container) *GIFPlugin {
 func (p *GIFPlugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eatgif",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "将双方头像逐帧合成到动态表情模板",
 	}
 }

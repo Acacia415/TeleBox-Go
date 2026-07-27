@@ -49,7 +49,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "yvlu",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "纯 Go 本地生成 Telegram 消息语录贴纸",
 	}
 }

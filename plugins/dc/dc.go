@@ -22,7 +22,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "dc",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "查询用户、群组或频道头像所在数据中心",
 	}
 }

@@ -27,7 +27,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "re",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "复读回复的消息",
 	}
 }

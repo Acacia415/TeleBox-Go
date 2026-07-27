@@ -31,6 +31,11 @@ curl -fsSL https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/i
 
 > `-p u` 只更新插件，不会更新 TeleBox-Go 主程序。
 
+大版本升级时也不需要重新安装。先发送 `-update`，等待服务自动重启并用
+`-status` 确认框架版本；然后发送 `-p u` 更新已安装插件。只有
+`-update` 无法完成或当前版本尚不支持在线更新时，才需要重新运行一键安装
+命令。
+
 ## 2. 支持环境
 
 - Linux `amd64`
@@ -439,6 +444,7 @@ systemctl --user daemon-reload
 | SQLite 数据库 | `~/.local/share/telebox/telebox.db` |
 | 插件目录 | `~/.local/share/telebox/plugins` |
 | 资源目录 | `~/.local/share/telebox/assets` |
+| 旧版插件数据保留目录 | `~/.local/share/telebox/legacy-assets` |
 | 登录二维码 | `~/.local/share/telebox/login-qr.png` |
 | 上一版主程序 | `~/.local/bin/telebox.previous` |
 
@@ -456,6 +462,7 @@ TELEBOX_SESSION_FILE
 TELEBOX_LOGIN_MODE
 TELEBOX_STORAGE_PATH
 TELEBOX_ASSETS_PATH
+TELEBOX_LEGACY_ASSETS_PATH
 TELEBOX_PLUGIN_DIR
 TELEBOX_PLUGIN_CATALOG
 TELEBOX_LOG_LEVEL
@@ -501,7 +508,8 @@ cd ~/telebox-migration
   -archive /path/to/telebox-backup.tar.gz \
   -config config.json \
   -session data/session.json \
-  -assets data/assets
+  -assets data/assets \
+  -legacy-assets data/legacy-assets
 ```
 
 确认无误后增加 `-apply`，生成 TeleBox-Go 配置、gotd 会话和插件资产：
@@ -512,6 +520,7 @@ cd ~/telebox-migration
   -config config.json \
   -session data/session.json \
   -assets data/assets \
+  -legacy-assets data/legacy-assets \
   -apply
 ```
 
@@ -530,8 +539,14 @@ cd ~/telebox-migration
 -p doctor
 ```
 
-旧 alias、sudo、sure 和各插件的兼容数据会从迁移后的资产中读取，并在插件
-首次启动时写入 Go 版存储。原压缩包不会被修改。
+旧 alias、sudo、sure 和当前 Go 插件支持的数据会从迁移后的活动资产中读取，
+并在插件首次启动时写入 Go 版存储。除此之外，原备份中
+`telebox/assets` 下的全部插件数据都会完整保存到 `data/legacy-assets`：
+
+- 文件固定为不可执行的私有权限，不会被框架或插件自动运行。
+- `_legacy_manifest*.json` 记录来源备份摘要、相对路径、大小和逐文件 SHA-256。
+- 暂不支持的旧插件不会被启用，但其数据可由未来的 Go 插件安全导入。
+- 原压缩包不会被修改，也不会复制旧 API 配置或登录会话到该目录。
 
 如果目标机器已经通过一键脚本运行 TeleBox-Go，不要直接覆盖正在使用的
 `~/.config/telebox` 或 `~/.local/share/telebox`。应先停止服务，在独立目录
@@ -542,7 +557,8 @@ cd ~/telebox-migration
 
 ## 15. 备份
 
-标准备份包含已安装插件、插件资产和一致的 SQLite 数据库快照：
+标准备份包含已安装插件、活动插件资产、保留的旧版插件数据和一致的 SQLite
+数据库快照：
 
 ```text
 -bf

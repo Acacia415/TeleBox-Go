@@ -37,6 +37,7 @@ func Run(factory Factory) error {
 	name := strings.TrimSpace(os.Getenv("TELEBOX_PLUGIN_NAME"))
 	workDir := strings.TrimSpace(os.Getenv("TELEBOX_PLUGIN_WORKDIR"))
 	assetsDir := strings.TrimSpace(os.Getenv("TELEBOX_PLUGIN_ASSETS_DIR"))
+	legacyAssetsDir := strings.TrimSpace(os.Getenv("TELEBOX_PLUGIN_LEGACY_ASSETS_DIR"))
 	if name == "" || workDir == "" {
 		return errors.New("plugin host environment is incomplete")
 	}
@@ -45,11 +46,20 @@ func Run(factory Factory) error {
 	})).With("plugin", name)
 
 	var state *runtimeState
+	ready := make(chan struct{})
 	peer := pluginrpc.New(os.Stdin, os.Stdout, func(
 		ctx context.Context,
 		method string,
 		raw json.RawMessage,
 	) (any, error) {
+		// The RPC reader starts immediately. The host can send PluginStart
+		// before the factory and proxy services below have finished wiring the
+		// runtime, so wait until state is published instead of racing it.
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		if state == nil {
 			return nil, errors.New("plugin runtime is not initialized")
 		}
@@ -60,6 +70,7 @@ func Run(factory Factory) error {
 		name,
 		workDir,
 		assetsDir,
+		legacyAssetsDir,
 		logger,
 	)
 	if err != nil {
@@ -92,6 +103,7 @@ func Run(factory Factory) error {
 		services: services,
 		commands: commands,
 	}
+	close(ready)
 
 	<-peer.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
