@@ -160,9 +160,9 @@ func (c Config) Validate() error {
 		problems = append(problems, "telegram.session_file is required")
 	}
 	switch strings.ToLower(c.Telegram.LoginMode) {
-	case "existing", "qr":
+	case "existing", "qr", "phone":
 	default:
-		problems = append(problems, "telegram.login_mode must be existing or qr")
+		problems = append(problems, "telegram.login_mode must be existing, qr, or phone")
 	}
 	if strings.TrimSpace(c.Storage.Path) == "" {
 		problems = append(problems, "storage.path is required")

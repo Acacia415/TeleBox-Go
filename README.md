@@ -9,7 +9,7 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 ## 当前状态
 
 - [x] 配置、日志、命令路由和所有者权限
-- [x] `gotd/td` 会话、QR 登录、更新补洞和 peer 解析
+- [x] `gotd/td` 会话、QR/手机号登录、更新补洞和 peer 解析
 - [x] SQLite 存储、迁移器、任务调度和统一关闭流程
 - [x] 全量备份中的 27 个插件全部完成 Go 移植
 - [x] 可校验的插件目录、按平台安装和独立进程运行
@@ -36,28 +36,34 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 curl -fsSL https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/install.sh | sh
 ```
 
-安装器会识别 `amd64` 或 `arm64`、校验发布包 SHA-256，并创建 systemd
-用户服务。首次安装后编辑：
+安装器会识别 `amd64` 或 `arm64`、校验发布包 SHA-256，然后依次询问
+Telegram API ID、API Hash 和登录方式。可以选择直接扫描终端中的 QR
+二维码，也可以输入手机号、验证码以及账号启用时的二步验证密码。只有
+登录成功后才会启动 systemd 用户服务。
 
-```text
-~/.config/telebox/telebox.env
-```
+即使使用 `curl | sh`，安装器也会从 `/dev/tty` 读取输入，不会把管道
+内容误当成验证码。API Hash 和二步验证密码输入时不会回显。
 
-填入 `TELEBOX_API_ID` 和 `TELEBOX_API_HASH`，再启动：
-
-```bash
-systemctl --user enable --now telebox
-journalctl --user -u telebox -f
-```
-
-也可以在安装时传入环境变量，或仅安装不启动：
+也可以使用环境变量预填 API 信息，或仅安装不登录：
 
 ```bash
-TELEBOX_API_ID=123456 TELEBOX_API_HASH=... sh install.sh
-sh install.sh --version v0.2.0 --no-start
+TELEBOX_API_ID=123456 TELEBOX_API_HASH=... \
+  TELEBOX_INSTALL_LOGIN_MODE=phone sh install.sh
+sh install.sh --version v0.2.0 --no-login
 ```
 
-首次登录生成的二维码图片位于数据目录，日志会显示完整路径。
+`--no-start` 会完成登录但不启动服务；`--no-login` 会同时跳过登录和
+启动。QR 登录还会把二维码图片保存到数据目录，终端会显示完整路径。
+
+已经安装后也可以单独重新登录：
+
+```bash
+set -a
+. ~/.config/telebox/telebox.env
+set +a
+~/.local/bin/telebox -config ~/.config/telebox/config.json \
+  -login -login-mode phone
+```
 
 ## 手动运行
 

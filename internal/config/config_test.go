@@ -89,3 +89,16 @@ func TestEnvironmentOverridesSecrets(t *testing.T) {
 		t.Fatalf("environment overrides were not applied")
 	}
 }
+
+func TestValidateAcceptsPhoneLogin(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.Telegram.APIID = 123
+	cfg.Telegram.APIHash = "hash"
+	cfg.Telegram.SessionFile = "session.json"
+	cfg.Telegram.LoginMode = "phone"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
