@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -98,7 +99,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "Telegram 登录成功，会话已保存。")
 		return 0
 	}
-	application, err := app.New(ctx, cfg, logger, client)
+	var restartRequested atomic.Bool
+	requestRestart := func() {
+		restartRequested.Store(true)
+		stop()
+	}
+	application, err := app.New(ctx, cfg, logger, client, requestRestart)
 	if err != nil {
 		logger.Error("initialize TeleBox", "error", err)
 		return 1
@@ -106,6 +112,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err := application.Run(ctx); err != nil {
 		logger.Error("TeleBox stopped", "error", err)
 		return 1
+	}
+	if restartRequested.Load() {
+		logger.Info("TeleBox restart requested")
+		return 75
 	}
 	return 0
 }

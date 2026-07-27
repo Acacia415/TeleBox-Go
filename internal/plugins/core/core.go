@@ -10,12 +10,15 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/buildinfo"
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/pluginmarket"
+	"github.com/Acacia415/TeleBox-Go/internal/selfupdate"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
 	"github.com/Acacia415/TeleBox-Go/pkg/pluginapi"
@@ -32,12 +35,20 @@ type PackageManager interface {
 	Disable(context.Context, string) error
 }
 
+type FrameworkUpdater interface {
+	Check(context.Context) (selfupdate.Status, error)
+	Update(context.Context, bool) (selfupdate.Result, error)
+}
+
 type Plugin struct {
-	services service.Container
-	router   *command.Router
-	registry *plugin.Registry
-	packages PackageManager
-	started  time.Time
+	services   service.Container
+	router     *command.Router
+	registry   *plugin.Registry
+	packages   PackageManager
+	updater    FrameworkUpdater
+	started    time.Time
+	updateMu   sync.Mutex
+	restarting atomic.Bool
 }
 
 func New(
@@ -45,12 +56,14 @@ func New(
 	router *command.Router,
 	registry *plugin.Registry,
 	packages PackageManager,
+	updater FrameworkUpdater,
 ) *Plugin {
 	return &Plugin{
 		services: services,
 		router:   router,
 		registry: registry,
 		packages: packages,
+		updater:  updater,
 		started:  time.Now(),
 	}
 }
@@ -81,6 +94,13 @@ func (p *Plugin) Commands() []command.Definition {
 			Handler:     p.status,
 		},
 		{
+			Name:        "update",
+			Aliases:     []string{"upgrade"},
+			Description: "检查并更新 TeleBox-Go 框架",
+			OwnerOnly:   true,
+			Handler:     p.updateFramework,
+		},
+		{
 			Name:        "prefix",
 			Description: "查看或修改命令前缀",
 			OwnerOnly:   true,
@@ -94,6 +114,119 @@ func (p *Plugin) Commands() []command.Definition {
 			Handler:     p.plugins,
 		},
 	}
+}
+
+func (p *Plugin) updateFramework(ctx context.Context, request command.Request) error {
+	if p.updater == nil {
+		return p.respond(ctx, request, "❌ 当前构建未配置框架更新器")
+	}
+	if p.restarting.Load() {
+		return p.respond(ctx, request, "⏳ 新版本已安装，服务正在重启")
+	}
+	if !p.updateMu.TryLock() {
+		return p.respond(ctx, request, "⏳ 已有更新任务正在进行")
+	}
+	defer p.updateMu.Unlock()
+
+	action := ""
+	if len(request.Args) > 0 {
+		action = strings.ToLower(strings.TrimSpace(request.Args[0]))
+	}
+	switch action {
+	case "help", "h":
+		return p.respondHTML(ctx, request, strings.Join([]string{
+			"<b>⬆️ TeleBox-Go 框架更新</b>",
+			"",
+			"• <code>" + html.EscapeString(request.Prefix+"update") + "</code>  更新到最新正式版",
+			"• <code>" + html.EscapeString(request.Prefix+"update check") + "</code>  只检查版本",
+			"• <code>" + html.EscapeString(request.Prefix+"update force") + "</code>  重新安装最新正式版",
+			"",
+			"插件更新：<code>" + html.EscapeString(request.Prefix+"p u") + "</code>",
+		}, "\n"))
+	case "check":
+		if len(request.Args) != 1 {
+			return p.respondUpdateUsage(ctx, request)
+		}
+		return p.checkFrameworkUpdate(ctx, request)
+	case "", "force":
+		if len(request.Args) > 1 {
+			return p.respondUpdateUsage(ctx, request)
+		}
+	default:
+		return p.respondUpdateUsage(ctx, request)
+	}
+	if p.services.Restart == nil {
+		return p.respond(ctx, request, "❌ 当前运行方式不支持自动重启")
+	}
+
+	if err := p.respond(ctx, request, "🔎 正在检查 TeleBox-Go 更新…"); err != nil {
+		return err
+	}
+	result, err := p.updater.Update(ctx, action == "force")
+	if err != nil {
+		return p.respondHTML(ctx, request,
+			"<b>❌ 更新失败</b>\n\n"+html.EscapeString(err.Error()))
+	}
+	if !result.Updated {
+		return p.respondHTML(ctx, request, fmt.Sprintf(
+			"<b>✅ 已是最新版本</b>\n\n当前版本：<code>%s</code>",
+			html.EscapeString(result.CurrentVersion),
+		))
+	}
+
+	p.restarting.Store(true)
+	responseErr := p.respondHTML(ctx, request, fmt.Sprintf(
+		"<b>✅ TeleBox-Go 更新完成</b>\n\n"+
+			"• <code>%s</code> → <code>%s</code>\n"+
+			"• SHA-256 校验通过\n"+
+			"• 旧版本已保存为 <code>telebox.previous</code>\n\n"+
+			"服务将在数秒后自动重启。",
+		html.EscapeString(result.CurrentVersion),
+		html.EscapeString(result.LatestVersion),
+	))
+	go func() {
+		time.Sleep(2 * time.Second)
+		p.services.Restart()
+	}()
+	return responseErr
+}
+
+func (p *Plugin) checkFrameworkUpdate(
+	ctx context.Context,
+	request command.Request,
+) error {
+	if err := p.respond(ctx, request, "🔎 正在检查 TeleBox-Go 更新…"); err != nil {
+		return err
+	}
+	status, err := p.updater.Check(ctx)
+	if err != nil {
+		return p.respondHTML(ctx, request,
+			"<b>❌ 检查更新失败</b>\n\n"+html.EscapeString(err.Error()))
+	}
+	title := "✅ 当前已是最新版本"
+	if status.UpdateAvailable {
+		title = "🆕 发现新版本"
+	}
+	text := fmt.Sprintf(
+		"<b>%s</b>\n\n• 当前：<code>%s</code>\n• 最新：<code>%s</code>",
+		title,
+		html.EscapeString(status.CurrentVersion),
+		html.EscapeString(status.LatestVersion),
+	)
+	if status.UpdateAvailable {
+		text += "\n\n发送 <code>" +
+			html.EscapeString(request.Prefix+"update") +
+			"</code> 开始更新"
+	}
+	return p.respondHTML(ctx, request, text)
+}
+
+func (p *Plugin) respondUpdateUsage(
+	ctx context.Context,
+	request command.Request,
+) error {
+	return p.respond(ctx, request,
+		"❌ 用法："+request.Prefix+"update [check|force|help]")
 }
 
 func (p *Plugin) status(ctx context.Context, request command.Request) error {
@@ -225,21 +358,83 @@ func (p *Plugin) ping(ctx context.Context, request command.Request) error {
 }
 
 func (p *Plugin) help(ctx context.Context, request command.Request) error {
-	routes := p.router.List()
-	lines := make([]string, 0, len(routes)+1)
-	lines = append(lines, "<b>🧭 TeleBox-Go 命令列表</b>", "")
-	isOwner := p.router.IsOwner(request.Message)
+	routes := visibleHelpRoutes(p.router.List(), p.router.IsOwner(request.Message))
+	if len(request.Args) > 0 {
+		target := strings.TrimSpace(request.Args[0])
+		target = strings.TrimPrefix(target, request.Prefix)
+		if route, ok := findHelpRoute(routes, target); ok {
+			return p.respondHTML(ctx, request, formatCommandHelp(request.Prefix, route))
+		}
+		return p.respondHTML(ctx, request, fmt.Sprintf(
+			"<b>❌ 未找到命令</b>\n\n<code>%s</code>\n\n发送 <code>%s</code> 查看命令列表",
+			html.EscapeString(target),
+			html.EscapeString(request.Prefix+"help"),
+		))
+	}
+	return p.respondHTML(ctx, request, formatCommandList(request.Prefix, routes))
+}
+
+func visibleHelpRoutes(routes []command.RouteInfo, isOwner bool) []command.RouteInfo {
+	result := make([]command.RouteInfo, 0, len(routes))
 	for _, route := range routes {
 		if route.OwnerOnly && !isOwner {
 			continue
 		}
-		line := "• <code>" + html.EscapeString(request.Prefix+route.Name) + "</code>"
-		if route.Description != "" {
-			line += "  " + html.EscapeString(route.Description)
-		}
-		lines = append(lines, line)
+		result = append(result, route)
 	}
-	return p.respondHTML(ctx, request, strings.Join(lines, "\n"))
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
+}
+
+func findHelpRoute(routes []command.RouteInfo, target string) (command.RouteInfo, bool) {
+	target = strings.ToLower(strings.TrimSpace(target))
+	for _, route := range routes {
+		if route.Name == target {
+			return route, true
+		}
+		for _, alias := range route.Aliases {
+			if alias == target {
+				return route, true
+			}
+		}
+	}
+	return command.RouteInfo{}, false
+}
+
+func formatCommandList(prefix string, routes []command.RouteInfo) string {
+	names := make([]string, 0, len(routes))
+	for _, route := range routes {
+		names = append(names, "<code>"+html.EscapeString(route.Name)+"</code>")
+	}
+	return "<b>命令列表：</b>\n" +
+		strings.Join(names, ", ") +
+		"\n\n发送 <code>" +
+		html.EscapeString(prefix+"help <命令>") +
+		"</code> 查看特定命令的帮助"
+}
+
+func formatCommandHelp(prefix string, route command.RouteInfo) string {
+	lines := []string{
+		"<b>命令帮助</b>\n<code>" +
+			html.EscapeString(prefix+route.Name) +
+			"</code>",
+	}
+	if route.Description != "" {
+		lines = append(lines, "", html.EscapeString(route.Description))
+	}
+	if len(route.Aliases) > 0 {
+		aliases := make([]string, 0, len(route.Aliases))
+		for _, alias := range route.Aliases {
+			aliases = append(aliases, "<code>"+html.EscapeString(prefix+alias)+"</code>")
+		}
+		lines = append(lines, "", "别名："+strings.Join(aliases, "、"))
+	}
+	if route.OwnerOnly {
+		lines = append(lines, "权限：仅所有者")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (p *Plugin) plugins(ctx context.Context, request command.Request) error {

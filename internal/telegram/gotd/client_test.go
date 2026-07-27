@@ -67,6 +67,21 @@ func TestPeerIDUsesTDLibConvention(t *testing.T) {
 	}
 }
 
+func TestDeviceAppVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"v0.2.2": "0.2.2",
+		"0.2.2":  "0.2.2",
+		"":       "dev",
+	}
+	for input, want := range tests {
+		if got := deviceAppVersion(input); got != want {
+			t.Fatalf("deviceAppVersion(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestInputPeerRequiresAccessHashEntities(t *testing.T) {
 	t.Parallel()
 

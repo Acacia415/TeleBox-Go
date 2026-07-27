@@ -14,6 +14,7 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 - [x] 全量备份中的 27 个插件全部完成 Go 移植
 - [x] 可校验的插件目录、按平台安装和独立进程运行
 - [x] Linux amd64/arm64 一键安装与 systemd 用户服务
+- [x] GitHub Release SHA-256 校验与 Telegram 内框架自更新
 - [ ] 旧插件业务数据库的逐插件转换（AI、SpeedLink、Telegram Backup 已兼容）
 - [ ] Linux 隔离账号端到端验收
 
@@ -26,7 +27,8 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 - AI 与音乐：`ai`、`music_bot`、`yt-dlp`
 - 系统与备份：`speedlink`、`speedtest`、`telegram-backup`
 
-完整进度见 [重构计划](docs/refactor-plan.md)。
+详细安装、登录、命令和更新说明见 [使用手册](docs/user-guide.md)，完整
+开发进度见 [重构计划](docs/refactor-plan.md)。
 
 ## Linux 一键安装
 
@@ -42,7 +44,8 @@ Telegram API ID、API Hash 和登录方式。可以选择直接扫描终端中�
 登录成功后才会启动 systemd 用户服务。
 
 即使使用 `curl | sh`，安装器也会从 `/dev/tty` 读取输入，不会把管道
-内容误当成验证码。API Hash 和二步验证密码输入时不会回显。
+内容误当成验证码。重新安装时不会显示已保存的 API ID；API Hash 和
+二步验证密码输入时也不会回显。
 
 也可以使用环境变量预填 API 信息，或仅安装不登录：
 
@@ -63,6 +66,14 @@ set -a
 set +a
 ~/.local/bin/telebox -config ~/.config/telebox/config.json \
   -login -login-mode phone
+```
+
+安装支持框架自更新的版本后，后续可以直接在 Telegram 中操作：
+
+```text
+-update check          检查新版本
+-update                更新框架并自动重启
+-p u                   更新全部已安装插件
 ```
 
 ## 手动运行
