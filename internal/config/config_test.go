@@ -33,6 +33,9 @@ func TestLoadAppliesDefaultsAndResolvesPaths(t *testing.T) {
 	if want := filepath.Join(dir, "state", "telebox.db"); cfg.Storage.Path != want {
 		t.Fatalf("Storage.Path = %q, want %q", cfg.Storage.Path, want)
 	}
+	if want := filepath.Join(dir, "data", "legacy-assets"); cfg.Storage.LegacyAssetsPath != want {
+		t.Fatalf("Storage.LegacyAssetsPath = %q, want %q", cfg.Storage.LegacyAssetsPath, want)
+	}
 }
 
 func TestLoadRejectsUnknownFields(t *testing.T) {
@@ -80,6 +83,7 @@ func TestEnvironmentOverridesSecrets(t *testing.T) {
 	}
 	t.Setenv("TELEBOX_API_ID", "999")
 	t.Setenv("TELEBOX_API_HASH", "new-secret")
+	t.Setenv("TELEBOX_LEGACY_ASSETS_PATH", "preserved")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -87,6 +91,9 @@ func TestEnvironmentOverridesSecrets(t *testing.T) {
 	}
 	if cfg.Telegram.APIID != 999 || cfg.Telegram.APIHash != "new-secret" {
 		t.Fatalf("environment overrides were not applied")
+	}
+	if want := filepath.Join(dir, "preserved"); cfg.Storage.LegacyAssetsPath != want {
+		t.Fatalf("legacy asset environment override = %q, want %q", cfg.Storage.LegacyAssetsPath, want)
 	}
 }
 
@@ -100,5 +107,19 @@ func TestValidateAcceptsPhoneLogin(t *testing.T) {
 	cfg.Telegram.LoginMode = "phone"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsOverlappingAssetPaths(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.Telegram.APIID = 123
+	cfg.Telegram.APIHash = "hash"
+	cfg.Telegram.SessionFile = "session.json"
+	cfg.Storage.LegacyAssetsPath = filepath.Join(cfg.Storage.AssetsPath, "legacy")
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "must not overlap") {
+		t.Fatalf("Validate() error = %v, want overlapping path rejection", err)
 	}
 }

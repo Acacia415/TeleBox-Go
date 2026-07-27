@@ -13,6 +13,7 @@ func TestPluginEnvironmentFiltersHostSecrets(t *testing.T) {
 		"example",
 		"/tmp/telebox/example",
 		"/tmp/telebox/assets",
+		"/tmp/telebox/legacy-assets",
 	)
 	values := make(map[string]string)
 	for _, item := range environment {
@@ -32,6 +33,9 @@ func TestPluginEnvironmentFiltersHostSecrets(t *testing.T) {
 	}
 	if values["TELEBOX_PLUGIN_ASSETS_DIR"] != "/tmp/telebox/assets" {
 		t.Fatalf("assets directory = %q", values["TELEBOX_PLUGIN_ASSETS_DIR"])
+	}
+	if values["TELEBOX_PLUGIN_LEGACY_ASSETS_DIR"] != "/tmp/telebox/legacy-assets" {
+		t.Fatalf("legacy assets directory = %q", values["TELEBOX_PLUGIN_LEGACY_ASSETS_DIR"])
 	}
 }
 

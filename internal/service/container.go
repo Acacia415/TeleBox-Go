@@ -49,18 +49,19 @@ type LogLevelController interface {
 // plugins. Keep application wiring here and Telegram implementation details
 // behind telegram.Client.
 type Container struct {
-	Logger      *slog.Logger
-	Telegram    telegram.Client
-	Storage     Storage
-	Tools       ToolRunner
-	Scheduler   Scheduler
-	AssetsDir   string
-	ConfigPath  string
-	StoragePath string
-	PluginsDir  string
-	SessionPath string
-	HTTP        HTTPClient
-	LogLevel    LogLevelController
-	LogPath     string
-	Restart     func()
+	Logger          *slog.Logger
+	Telegram        telegram.Client
+	Storage         Storage
+	Tools           ToolRunner
+	Scheduler       Scheduler
+	AssetsDir       string
+	LegacyAssetsDir string
+	ConfigPath      string
+	StoragePath     string
+	PluginsDir      string
+	SessionPath     string
+	HTTP            HTTPClient
+	LogLevel        LogLevelController
+	LogPath         string
+	Restart         func()
 }

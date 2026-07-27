@@ -60,7 +60,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "yt-dlp",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "使用 yt-dlp 搜索并下载 YouTube 音乐",
 	}
 }

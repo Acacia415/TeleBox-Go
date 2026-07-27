@@ -25,7 +25,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "jointime",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "查询用户加入群组的时间",
 	}
 }

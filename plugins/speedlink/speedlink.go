@@ -108,7 +108,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "speedlink",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "通过 SSH 在本机或多台远程服务器运行 Ookla Speedtest",
 	}
 }

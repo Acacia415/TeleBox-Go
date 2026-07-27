@@ -34,26 +34,30 @@ type LegacyConfig struct {
 }
 
 type BackupInventory struct {
-	SHA256        string              `json:"sha256"`
-	ArchiveBytes  int64               `json:"archive_bytes"`
-	Plugins       []string            `json:"plugins"`
-	PluginCount   int                 `json:"plugin_count"`
-	AssetRoots    []string            `json:"asset_roots"`
-	AssetFiles    int                 `json:"migratable_asset_files"`
-	AssetBytes    int64               `json:"migratable_asset_bytes"`
-	SessionFormat StringSessionFormat `json:"session_format"`
-	SessionDC     int                 `json:"session_dc"`
+	SHA256              string              `json:"sha256"`
+	ArchiveBytes        int64               `json:"archive_bytes"`
+	Plugins             []string            `json:"plugins"`
+	PluginCount         int                 `json:"plugin_count"`
+	AssetRoots          []string            `json:"asset_roots"`
+	AssetFiles          int                 `json:"migratable_asset_files"`
+	AssetBytes          int64               `json:"migratable_asset_bytes"`
+	PreservedAssetFiles int                 `json:"preserved_asset_files"`
+	PreservedAssetBytes int64               `json:"preserved_asset_bytes"`
+	SessionFormat       StringSessionFormat `json:"session_format"`
+	SessionDC           int                 `json:"session_dc"`
 }
 
 type ConvertOptions struct {
-	ConfigPath  string
-	SessionPath string
-	AssetsPath  string
+	ConfigPath       string
+	SessionPath      string
+	AssetsPath       string
+	LegacyAssetsPath string
 }
 
 type ConversionResult struct {
-	Inventory BackupInventory `json:"inventory"`
-	Assets    AssetExtraction `json:"assets"`
+	Inventory    BackupInventory `json:"inventory"`
+	Assets       AssetExtraction `json:"assets"`
+	LegacyAssets AssetExtraction `json:"legacy_assets"`
 }
 
 func InspectBackup(archivePath string) (BackupInventory, error) {
@@ -105,6 +109,12 @@ func InspectBackup(archivePath string) (BackupInventory, error) {
 	}
 	inventory.AssetFiles = assets.Files
 	inventory.AssetBytes = assets.Bytes
+	preservedAssets, err := inspectAllLegacyAssets(archivePath)
+	if err != nil {
+		return BackupInventory{}, err
+	}
+	inventory.PreservedAssetFiles = preservedAssets.Files
+	inventory.PreservedAssetBytes = preservedAssets.Bytes
 	return inventory, nil
 }
 
@@ -129,9 +139,16 @@ func ConvertBackupWithOptions(
 	if options.ConfigPath == "" || options.SessionPath == "" {
 		return ConversionResult{}, errors.New("config and session output paths are required")
 	}
+	if options.AssetsPath != "" && options.LegacyAssetsPath != "" &&
+		outputPathsOverlap(options.AssetsPath, options.LegacyAssetsPath) {
+		return ConversionResult{}, errors.New("asset and legacy asset output paths must not overlap")
+	}
 	targets := []string{options.ConfigPath, options.SessionPath}
 	if options.AssetsPath != "" {
 		targets = append(targets, options.AssetsPath)
+	}
+	if options.LegacyAssetsPath != "" {
+		targets = append(targets, options.LegacyAssetsPath)
 	}
 	for _, target := range targets {
 		if _, err := os.Lstat(target); err == nil {
@@ -169,6 +186,12 @@ func ConvertBackupWithOptions(
 	if options.AssetsPath != "" {
 		cfg.Storage.AssetsPath = relativeOrAbsolute(filepath.Dir(options.ConfigPath), options.AssetsPath)
 	}
+	if options.LegacyAssetsPath != "" {
+		cfg.Storage.LegacyAssetsPath = relativeOrAbsolute(
+			filepath.Dir(options.ConfigPath),
+			options.LegacyAssetsPath,
+		)
+	}
 
 	configTemp, err := createConfigTemp(options.ConfigPath, cfg)
 	if err != nil {
@@ -177,6 +200,7 @@ func ConvertBackupWithOptions(
 	defer os.Remove(configTemp)
 
 	var extraction AssetExtraction
+	var legacyExtraction AssetExtraction
 	if options.AssetsPath != "" {
 		extraction, err = ExtractLegacyAssets(
 			archivePath,
@@ -188,9 +212,25 @@ func ConvertBackupWithOptions(
 			return ConversionResult{}, err
 		}
 	}
+	if options.LegacyAssetsPath != "" {
+		legacyExtraction, err = PreserveLegacyAssets(
+			archivePath,
+			options.LegacyAssetsPath,
+			inventory.SHA256,
+		)
+		if err != nil {
+			if options.AssetsPath != "" {
+				_ = os.RemoveAll(options.AssetsPath)
+			}
+			return ConversionResult{}, err
+		}
+	}
 	rollbackAssets := func() {
 		if options.AssetsPath != "" {
 			_ = os.RemoveAll(options.AssetsPath)
+		}
+		if options.LegacyAssetsPath != "" {
+			_ = os.RemoveAll(options.LegacyAssetsPath)
 		}
 	}
 
@@ -204,8 +244,9 @@ func ConvertBackupWithOptions(
 		return ConversionResult{}, fmt.Errorf("install converted config: %w", err)
 	}
 	return ConversionResult{
-		Inventory: inventory,
-		Assets:    extraction,
+		Inventory:    inventory,
+		Assets:       extraction,
+		LegacyAssets: legacyExtraction,
 	}, nil
 }
 
@@ -270,6 +311,11 @@ func scanBackup(archivePath string) (LegacyConfig, []string, error) {
 
 func safeArchivePath(value string) (string, error) {
 	value = strings.ReplaceAll(value, "\\", "/")
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("unsafe archive path %q", value)
+		}
+	}
 	cleaned := path.Clean(value)
 	if cleaned == "." || strings.HasPrefix(cleaned, "/") || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return "", fmt.Errorf("unsafe archive path %q", value)
@@ -359,6 +405,22 @@ func relativeOrAbsolute(baseDir, target string) string {
 		return absolute
 	}
 	return target
+}
+
+func outputPathsOverlap(first, second string) bool {
+	return outputPathContains(first, second) || outputPathContains(second, first)
+}
+
+func outputPathContains(parent, child string) bool {
+	parent, parentErr := filepath.Abs(parent)
+	child, childErr := filepath.Abs(child)
+	if parentErr != nil || childErr != nil {
+		return strings.EqualFold(filepath.Clean(parent), filepath.Clean(child))
+	}
+	relative, err := filepath.Rel(parent, child)
+	return err == nil &&
+		(relative == "." ||
+			(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))))
 }
 
 func sortedKeys(values map[string]struct{}) []string {

@@ -52,7 +52,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "convert",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "将回复的视频或媒体文件转换为 MP3",
 	}
 }

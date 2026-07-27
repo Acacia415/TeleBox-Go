@@ -65,6 +65,11 @@ func convert(args []string, stdout, stderr io.Writer) int {
 	configPath := flags.String("config", "config.json", "new TeleBox-Go config path")
 	sessionPath := flags.String("session", "data/session.json", "new gotd session path")
 	assetsPath := flags.String("assets", "data/assets", "new plugin asset directory")
+	legacyAssetsPath := flags.String(
+		"legacy-assets",
+		"data/legacy-assets",
+		"preserved legacy plugin asset directory",
+	)
 	apply := flags.Bool("apply", false, "write converted config and session")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -82,21 +87,24 @@ func convert(args []string, stdout, stderr io.Writer) int {
 		context.Background(),
 		*archivePath,
 		migration.ConvertOptions{
-			ConfigPath:  *configPath,
-			SessionPath: *sessionPath,
-			AssetsPath:  *assetsPath,
+			ConfigPath:       *configPath,
+			SessionPath:      *sessionPath,
+			AssetsPath:       *assetsPath,
+			LegacyAssetsPath: *legacyAssetsPath,
 		},
 	)
 	if err != nil {
 		fmt.Fprintf(stderr, "convert backup: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "converted %d plugins; session format=%s dc=%d; assets=%d files/%d bytes\n",
+	fmt.Fprintf(stdout, "converted %d plugins; session format=%s dc=%d; assets=%d files/%d bytes; preserved legacy assets=%d files/%d bytes\n",
 		result.Inventory.PluginCount,
 		result.Inventory.SessionFormat,
 		result.Inventory.SessionDC,
 		result.Assets.Files,
 		result.Assets.Bytes,
+		result.LegacyAssets.Files,
+		result.LegacyAssets.Bytes,
 	)
 	return 0
 }

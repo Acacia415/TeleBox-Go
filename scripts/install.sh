@@ -320,7 +320,7 @@ fi
 
 install -d -m 0755 "${PREFIX}/bin"
 install -d -m 0700 "$CONFIG_DIR" "$DATA_DIR" \
-    "${DATA_DIR}/assets" "${DATA_DIR}/plugins"
+    "${DATA_DIR}/assets" "${DATA_DIR}/legacy-assets" "${DATA_DIR}/plugins"
 install -m 0755 "$TELEBOX_SOURCE" "${PREFIX}/bin/telebox"
 install -m 0644 "$EXAMPLE_SOURCE" "${CONFIG_DIR}/config.example.json"
 if [ ! -f "${CONFIG_DIR}/config.json" ]; then
@@ -334,6 +334,7 @@ awk \
     -v session_file="$SESSION_FILE" \
     -v storage_path="${DATA_DIR}/telebox.db" \
     -v assets_path="${DATA_DIR}/assets" \
+    -v legacy_assets_path="${DATA_DIR}/legacy-assets" \
     -v plugin_dir="${DATA_DIR}/plugins" '
     BEGIN {
         values["TELEBOX_API_ID"] = api_id
@@ -342,6 +343,7 @@ awk \
         values["TELEBOX_SESSION_FILE"] = session_file
         values["TELEBOX_STORAGE_PATH"] = storage_path
         values["TELEBOX_ASSETS_PATH"] = assets_path
+        values["TELEBOX_LEGACY_ASSETS_PATH"] = legacy_assets_path
         values["TELEBOX_PLUGIN_DIR"] = plugin_dir
         order[1] = "TELEBOX_API_ID"
         order[2] = "TELEBOX_API_HASH"
@@ -349,7 +351,8 @@ awk \
         order[4] = "TELEBOX_SESSION_FILE"
         order[5] = "TELEBOX_STORAGE_PATH"
         order[6] = "TELEBOX_ASSETS_PATH"
-        order[7] = "TELEBOX_PLUGIN_DIR"
+        order[7] = "TELEBOX_LEGACY_ASSETS_PATH"
+        order[8] = "TELEBOX_PLUGIN_DIR"
     }
     {
         separator = index($0, "=")
@@ -363,7 +366,7 @@ awk \
         print
     }
     END {
-        for (i = 1; i <= 7; i++) {
+        for (i = 1; i <= 8; i++) {
             key = order[i]
             if (!seen[key]) {
                 print key "=" values[key]
@@ -378,6 +381,7 @@ awk \
     printf 'TELEBOX_SESSION_FILE=%s\n' "$SESSION_FILE" >>"$ENV_OUTPUT"
     printf 'TELEBOX_STORAGE_PATH=%s\n' "${DATA_DIR}/telebox.db" >>"$ENV_OUTPUT"
     printf 'TELEBOX_ASSETS_PATH=%s\n' "${DATA_DIR}/assets" >>"$ENV_OUTPUT"
+    printf 'TELEBOX_LEGACY_ASSETS_PATH=%s\n' "${DATA_DIR}/legacy-assets" >>"$ENV_OUTPUT"
     printf 'TELEBOX_PLUGIN_DIR=%s\n' "${DATA_DIR}/plugins" >>"$ENV_OUTPUT"
 }
 install -m 0600 "$ENV_OUTPUT" "$ENV_FILE"
@@ -398,6 +402,8 @@ ExecStart=${PREFIX}/bin/telebox -config ${CONFIG_DIR}/config.json
 WorkingDirectory=${DATA_DIR}
 Restart=on-failure
 RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
 NoNewPrivileges=true
 PrivateTmp=true
 
@@ -416,6 +422,7 @@ if [ "$NEED_LOGIN" -eq 1 ]; then
         TELEBOX_SESSION_FILE="$SESSION_FILE" \
         TELEBOX_STORAGE_PATH="${DATA_DIR}/telebox.db" \
         TELEBOX_ASSETS_PATH="${DATA_DIR}/assets" \
+        TELEBOX_LEGACY_ASSETS_PATH="${DATA_DIR}/legacy-assets" \
         TELEBOX_PLUGIN_DIR="${DATA_DIR}/plugins" \
         "${PREFIX}/bin/telebox" \
         -config "${CONFIG_DIR}/config.json" \

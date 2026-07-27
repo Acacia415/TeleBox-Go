@@ -63,10 +63,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if !*loginOnly {
 		result, restoreErr := corebackup.ApplyPending(corebackup.Paths{
-			Config:  cfg.SourcePath,
-			Storage: cfg.Storage.Path,
-			Assets:  cfg.Storage.AssetsPath,
-			Plugins: cfg.Plugins.Directory,
+			Config:       cfg.SourcePath,
+			Storage:      cfg.Storage.Path,
+			Assets:       cfg.Storage.AssetsPath,
+			LegacyAssets: cfg.Storage.LegacyAssetsPath,
+			Plugins:      cfg.Plugins.Directory,
 		})
 		if restoreErr != nil {
 			fmt.Fprintf(stderr, "pending restore was not applied: %v\n", restoreErr)
@@ -145,13 +146,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Error("initialize TeleBox", "error", err)
 		return 1
 	}
-	if err := application.Run(ctx); err != nil {
-		logger.Error("TeleBox stopped", "error", err)
-		return 1
-	}
+	runErr := application.Run(ctx)
 	if restartRequested.Load() {
+		if runErr != nil {
+			logger.Warn("TeleBox stopped with cleanup errors during restart", "error", runErr)
+		}
 		logger.Info("TeleBox restart requested")
 		return 75
+	}
+	if runErr != nil {
+		logger.Error("TeleBox stopped", "error", runErr)
+		return 1
 	}
 	return 0
 }

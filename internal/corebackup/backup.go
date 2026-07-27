@@ -32,10 +32,11 @@ type Storage interface {
 }
 
 type Paths struct {
-	Config  string
-	Storage string
-	Assets  string
-	Plugins string
+	Config       string
+	Storage      string
+	Assets       string
+	LegacyAssets string
+	Plugins      string
 }
 
 type File struct {
@@ -115,6 +116,7 @@ func Create(
 	sources := []archiveSource{
 		{Source: databaseSnapshot, Archive: archiveRoot + "/data/telebox.db"},
 		{Source: paths.Assets, Archive: archiveRoot + "/data/assets"},
+		{Source: paths.LegacyAssets, Archive: archiveRoot + "/data/legacy-assets"},
 		{Source: paths.Plugins, Archive: archiveRoot + "/data/plugins"},
 	}
 	if full {
@@ -339,6 +341,11 @@ func ApplyPending(paths Paths) (ApplyResult, error) {
 			Backup: filepath.Join(rollback, "assets"),
 		},
 		{
+			Source: filepath.Join(stage, filepath.FromSlash(archiveRoot+"/data/legacy-assets")),
+			Target: paths.LegacyAssets,
+			Backup: filepath.Join(rollback, "legacy-assets"),
+		},
+		{
 			Source: filepath.Join(stage, filepath.FromSlash(archiveRoot+"/data/plugins")),
 			Target: paths.Plugins,
 			Backup: filepath.Join(rollback, "plugins"),
@@ -356,6 +363,9 @@ func ApplyPending(paths Paths) (ApplyResult, error) {
 			continue
 		} else if err != nil {
 			return ApplyResult{}, err
+		}
+		if strings.TrimSpace(item.Target) == "" {
+			return ApplyResult{}, fmt.Errorf("restore target is required for %q", item.Source)
 		}
 		if err := ensureRestoreTarget(item.Target); err != nil {
 			return ApplyResult{}, err

@@ -76,7 +76,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "bin",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "查询银行卡 BIN/IIN 发行信息",
 	}
 }

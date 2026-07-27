@@ -36,7 +36,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "aban",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "单群及跨管理群封禁管理",
 	}
 }

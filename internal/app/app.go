@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,6 +65,10 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
+	if err := os.MkdirAll(cfg.Storage.LegacyAssetsPath, 0o700); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("create legacy asset directory: %w", err)
+	}
 	tools, err := toolrunner.New(cfg.Tools.MaxConcurrent)
 	if err != nil {
 		_ = store.Close()
@@ -90,20 +95,21 @@ func New(
 		return nil, fmt.Errorf("create command pool: %w", err)
 	}
 	services := service.Container{
-		Logger:      logger,
-		Telegram:    client,
-		Storage:     store,
-		Tools:       tools,
-		Scheduler:   jobScheduler,
-		AssetsDir:   cfg.Storage.AssetsPath,
-		ConfigPath:  cfg.SourcePath,
-		StoragePath: cfg.Storage.Path,
-		PluginsDir:  cfg.Plugins.Directory,
-		SessionPath: cfg.Telegram.SessionFile,
-		HTTP:        httpClient,
-		LogLevel:    logLevel,
-		LogPath:     cfg.Logging.Path,
-		Restart:     restart,
+		Logger:          logger,
+		Telegram:        client,
+		Storage:         store,
+		Tools:           tools,
+		Scheduler:       jobScheduler,
+		AssetsDir:       cfg.Storage.AssetsPath,
+		LegacyAssetsDir: cfg.Storage.LegacyAssetsPath,
+		ConfigPath:      cfg.SourcePath,
+		StoragePath:     cfg.Storage.Path,
+		PluginsDir:      cfg.Plugins.Directory,
+		SessionPath:     cfg.Telegram.SessionFile,
+		HTTP:            httpClient,
+		LogLevel:        logLevel,
+		LogPath:         cfg.Logging.Path,
+		Restart:         restart,
 	}
 	market, err := pluginmarket.New(pluginmarket.Config{
 		Directory:       cfg.Plugins.Directory,

@@ -346,10 +346,11 @@ func (p *Plugin) saveBackupTargets(ctx context.Context, targets []int64) error {
 
 func (p *Plugin) backupPaths() corebackup.Paths {
 	return corebackup.Paths{
-		Config:  p.services.ConfigPath,
-		Storage: p.services.StoragePath,
-		Assets:  p.services.AssetsDir,
-		Plugins: p.services.PluginsDir,
+		Config:       p.services.ConfigPath,
+		Storage:      p.services.StoragePath,
+		Assets:       p.services.AssetsDir,
+		LegacyAssets: p.services.LegacyAssetsDir,
+		Plugins:      p.services.PluginsDir,
 	}
 }
 

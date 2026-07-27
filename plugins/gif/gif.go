@@ -44,7 +44,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "gif",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "将 GIF 或短视频自适应压缩为 Telegram 视频贴纸",
 	}
 }

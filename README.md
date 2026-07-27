@@ -11,7 +11,7 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 - [x] 配置、日志、命令路由和所有者权限
 - [x] `gotd/td` 会话、QR/手机号登录、更新补洞和 peer 解析
 - [x] SQLite 存储、迁移器、任务调度和统一关闭流程
-- [x] 全量备份中保留的 25 个插件完成原版功能对照与 Go 移植
+- [x] 已保留插件完成原版功能对照与 Go 移植
 - [x] 可校验的插件目录、按平台安装和独立进程运行
 - [x] Linux amd64/arm64 一键安装与 systemd 用户服务
 - [x] GitHub Release SHA-256 校验与 Telegram 内框架自更新
@@ -201,6 +201,7 @@ TELEBOX_SESSION_FILE
 TELEBOX_LOGIN_MODE
 TELEBOX_STORAGE_PATH
 TELEBOX_ASSETS_PATH
+TELEBOX_LEGACY_ASSETS_PATH
 TELEBOX_PLUGIN_DIR
 TELEBOX_PLUGIN_CATALOG
 TELEBOX_LOG_LEVEL
@@ -224,7 +225,11 @@ go run ./cmd/telebox-migrate convert \
   -config config.json \
   -session data/session.json \
   -assets data/assets \
+  -legacy-assets data/legacy-assets \
   -apply
 ```
 
-迁移器只读取原压缩包，不会修改 TypeScript 项目或备份包。
+迁移器只读取原压缩包，不会修改 TypeScript 项目或备份包。当前 Go 插件可
+读取的数据会进入 `data/assets`；旧备份内 `telebox/assets` 的全部文件还会以
+不可执行方式保存到 `data/legacy-assets`，并生成逐文件 SHA-256 清单，供以后
+新增的 Go 插件导入。

@@ -37,7 +37,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "ai",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "调用 Gemini、OpenAI、Claude、DeepSeek、Grok 与第三方模型",
 	}
 }

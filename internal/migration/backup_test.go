@@ -34,14 +34,22 @@ func TestInspectAndConvertBackup(t *testing.T) {
 	if inventory.SessionFormat != StringSessionGramJS || inventory.SessionDC != 2 {
 		t.Fatalf("session inventory = format:%s dc:%d", inventory.SessionFormat, inventory.SessionDC)
 	}
+	if inventory.PreservedAssetFiles != 2 || inventory.PreservedAssetBytes != 18 {
+		t.Fatalf("preserved asset inventory = %d files/%d bytes",
+			inventory.PreservedAssetFiles,
+			inventory.PreservedAssetBytes,
+		)
+	}
 
 	configPath := filepath.Join(dir, "output", "config.json")
 	sessionPath := filepath.Join(dir, "output", "data", "session.json")
 	assetsPath := filepath.Join(dir, "output", "data", "assets")
+	legacyAssetsPath := filepath.Join(dir, "output", "data", "legacy-assets")
 	result, err := ConvertBackupWithOptions(context.Background(), archivePath, ConvertOptions{
-		ConfigPath:  configPath,
-		SessionPath: sessionPath,
-		AssetsPath:  assetsPath,
+		ConfigPath:       configPath,
+		SessionPath:      sessionPath,
+		AssetsPath:       assetsPath,
+		LegacyAssetsPath: legacyAssetsPath,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +66,43 @@ func TestInspectAndConvertBackup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(assetsPath, "unsupported", "cache.db")); !os.IsNotExist(err) {
 		t.Fatalf("unsupported plugin asset was migrated: %v", err)
 	}
+	if result.LegacyAssets.Files != 2 || result.LegacyAssets.Bytes != 18 {
+		t.Fatalf("legacy asset preservation = %+v", result.LegacyAssets)
+	}
+	for relative, expected := range map[string]string{
+		filepath.Join("ip", "data.db"):           "test",
+		filepath.Join("unsupported", "cache.db"): "do not migrate",
+	} {
+		data, err := os.ReadFile(filepath.Join(legacyAssetsPath, relative))
+		if err != nil || string(data) != expected {
+			t.Fatalf("preserved legacy asset %q = %q, %v", relative, data, err)
+		}
+		info, err := os.Stat(filepath.Join(legacyAssetsPath, relative))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm()&0o111 != 0 {
+			t.Fatalf("preserved legacy asset %q is executable: %v", relative, info.Mode())
+		}
+	}
+	manifestData, err := os.ReadFile(filepath.Join(legacyAssetsPath, legacyAssetManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest preservedAssetManifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SourceSHA256 != inventory.SHA256 ||
+		manifest.ExtractedFile != 2 ||
+		len(manifest.Files) != 2 {
+		t.Fatalf("legacy asset manifest = %#v", manifest)
+	}
+	for _, file := range manifest.Files {
+		if len(file.SHA256) != 64 {
+			t.Fatalf("legacy asset checksum for %q = %q", file.Path, file.SHA256)
+		}
+	}
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
@@ -66,12 +111,18 @@ func TestInspectAndConvertBackup(t *testing.T) {
 		Plugins struct {
 			Enabled []string `json:"enabled"`
 		} `json:"plugins"`
+		Storage struct {
+			LegacyAssetsPath string `json:"legacy_assets_path"`
+		} `json:"storage"`
 	}
 	if err := json.Unmarshal(configData, &converted); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(converted.Plugins.Enabled, []string{"bin", "ip"}) {
 		t.Fatalf("enabled plugins = %v", converted.Plugins.Enabled)
+	}
+	if converted.Storage.LegacyAssetsPath != filepath.Join("data", "legacy-assets") {
+		t.Fatalf("legacy assets config path = %q", converted.Storage.LegacyAssetsPath)
 	}
 	loader := session.Loader{Storage: &session.FileStorage{Path: sessionPath}}
 	data, err := loader.Load(context.Background())
@@ -90,7 +141,12 @@ func TestInspectAndConvertBackup(t *testing.T) {
 func TestSafeArchivePathRejectsTraversal(t *testing.T) {
 	t.Parallel()
 
-	for _, value := range []string{"../secret", "/absolute", `..\secret`} {
+	for _, value := range []string{
+		"../secret",
+		"/absolute",
+		`..\secret`,
+		"telebox/assets/../secret",
+	} {
 		if _, err := safeArchivePath(value); err == nil {
 			t.Fatalf("safeArchivePath(%q) accepted unsafe path", value)
 		}
@@ -116,6 +172,139 @@ func TestAssetSelectorsOnlyIncludeRequestedPlugins(t *testing.T) {
 	}
 	if matchesAssetSelector("trace/db.json", selectors) {
 		t.Fatalf("selectors %v unexpectedly include trace assets", selectors)
+	}
+}
+
+func TestConvertRejectsOverlappingAssetPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	assets := filepath.Join(root, "data", "assets")
+	_, err := ConvertBackupWithOptions(context.Background(), "unused.tar.gz", ConvertOptions{
+		ConfigPath:       filepath.Join(root, "config.json"),
+		SessionPath:      filepath.Join(root, "data", "session.json"),
+		AssetsPath:       assets,
+		LegacyAssetsPath: filepath.Join(assets, "legacy"),
+	})
+	if err == nil {
+		t.Fatal("ConvertBackupWithOptions() accepted overlapping asset paths")
+	}
+}
+
+func TestPreserveLegacyAssetsRejectsUnsafeEntries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		entries []testArchiveEntry
+	}{
+		{
+			name: "symbolic link",
+			entries: []testArchiveEntry{{
+				header: tar.Header{
+					Name:     "telebox/assets/plugin/link",
+					Typeflag: tar.TypeSymlink,
+					Linkname: "../../secret",
+				},
+			}},
+		},
+		{
+			name: "duplicate file",
+			entries: []testArchiveEntry{
+				{header: tar.Header{Name: "telebox/assets/plugin/data.db"}, data: []byte("one")},
+				{header: tar.Header{Name: "telebox/assets/plugin/data.db"}, data: []byte("two")},
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			archivePath := filepath.Join(root, "backup.tar.gz")
+			writeAssetArchive(t, archivePath, test.entries)
+			destination := filepath.Join(root, "legacy-assets")
+			if _, err := PreserveLegacyAssets(archivePath, destination, "source"); err == nil {
+				t.Fatal("PreserveLegacyAssets() error = nil, want rejection")
+			}
+			if _, err := os.Stat(destination); !os.IsNotExist(err) {
+				t.Fatalf("partial legacy asset directory remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestPreserveLegacyAssetsDoesNotReplaceOriginalManifestNamedFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "backup.tar.gz")
+	writeAssetArchive(t, archivePath, []testArchiveEntry{{
+		header: tar.Header{Name: "telebox/assets/" + legacyAssetManifestName},
+		data:   []byte("original plugin data"),
+	}})
+	destination := filepath.Join(root, "legacy-assets")
+	result, err := PreserveLegacyAssets(archivePath, destination, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Files != 1 {
+		t.Fatalf("preserved files = %d, want 1", result.Files)
+	}
+	data, err := os.ReadFile(filepath.Join(destination, legacyAssetManifestName))
+	if err != nil || string(data) != "original plugin data" {
+		t.Fatalf("original manifest-named asset = %q, %v", data, err)
+	}
+	generated, err := os.ReadFile(filepath.Join(destination, "_legacy_manifest.1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest preservedAssetManifest
+	if err := json.Unmarshal(generated, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Format != "telebox-go-legacy-assets" || len(manifest.Files) != 1 {
+		t.Fatalf("generated legacy manifest = %#v", manifest)
+	}
+}
+
+type testArchiveEntry struct {
+	header tar.Header
+	data   []byte
+}
+
+func writeAssetArchive(t *testing.T, target string, entries []testArchiveEntry) {
+	t.Helper()
+	file, err := os.Create(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := gzip.NewWriter(file)
+	archive := tar.NewWriter(compressed)
+	for _, entry := range entries {
+		header := entry.header
+		if header.Typeflag == 0 {
+			header.Typeflag = tar.TypeReg
+		}
+		header.Mode = 0o700
+		header.Size = int64(len(entry.data))
+		if err := archive.WriteHeader(&header); err != nil {
+			t.Fatal(err)
+		}
+		if len(entry.data) > 0 {
+			if _, err := archive.Write(entry.data); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

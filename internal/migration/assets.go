@@ -3,6 +3,8 @@ package migration
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,9 +18,11 @@ import (
 )
 
 const (
-	legacyAssetsPrefix = "telebox/assets/"
-	maxAssetFileSize   = 512 << 20
-	maxAssetTotalSize  = 4 << 30
+	legacyAssetsPrefix      = "telebox/assets/"
+	legacyAssetManifestName = "_legacy_manifest.json"
+	maxAssetFileSize        = 512 << 20
+	maxAssetTotalSize       = 4 << 30
+	maxAssetFileCount       = 100000
 )
 
 type AssetExtraction struct {
@@ -33,6 +37,22 @@ type assetManifest struct {
 	ExtractedFile int      `json:"extracted_files"`
 	ExtractedByte int64    `json:"extracted_bytes"`
 	CreatedAt     string   `json:"created_at"`
+}
+
+type preservedAssetFile struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+type preservedAssetManifest struct {
+	Format        string               `json:"format"`
+	Version       int                  `json:"version"`
+	SourceSHA256  string               `json:"source_sha256"`
+	Files         []preservedAssetFile `json:"files"`
+	ExtractedFile int                  `json:"extracted_files"`
+	ExtractedByte int64                `json:"extracted_bytes"`
+	CreatedAt     string               `json:"created_at"`
 }
 
 func inspectLegacyAssets(archivePath string, plugins []string) (AssetExtraction, error) {
@@ -50,6 +70,7 @@ func inspectLegacyAssets(archivePath string, plugins []string) (AssetExtraction,
 	selectors := assetSelectors(plugins)
 	reader := tar.NewReader(compressed)
 	var result AssetExtraction
+	seen := make(map[string]struct{})
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -72,11 +93,71 @@ func inspectLegacyAssets(archivePath string, plugins []string) (AssetExtraction,
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 			return AssetExtraction{}, fmt.Errorf("unsupported archive asset type for %q", name)
 		}
+		if _, duplicate := seen[relative]; duplicate {
+			return AssetExtraction{}, fmt.Errorf("duplicate archive asset %q", name)
+		}
+		seen[relative] = struct{}{}
 		if header.Size < 0 || header.Size > maxAssetFileSize ||
 			result.Bytes+header.Size > maxAssetTotalSize {
 			return AssetExtraction{}, fmt.Errorf("archive asset %q exceeds migration size limit", name)
 		}
 		result.Files++
+		if result.Files > maxAssetFileCount {
+			return AssetExtraction{}, errors.New("backup contains too many legacy asset files")
+		}
+		result.Bytes += header.Size
+	}
+}
+
+func inspectAllLegacyAssets(archivePath string) (AssetExtraction, error) {
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		return AssetExtraction{}, fmt.Errorf("open backup assets: %w", err)
+	}
+	defer archive.Close()
+	compressed, err := gzip.NewReader(archive)
+	if err != nil {
+		return AssetExtraction{}, fmt.Errorf("open backup asset gzip stream: %w", err)
+	}
+	defer compressed.Close()
+
+	reader := tar.NewReader(compressed)
+	var result AssetExtraction
+	seen := make(map[string]struct{})
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return result, nil
+		}
+		if err != nil {
+			return AssetExtraction{}, fmt.Errorf("read backup assets: %w", err)
+		}
+		name, err := safeArchivePath(header.Name)
+		if err != nil {
+			return AssetExtraction{}, err
+		}
+		if !strings.HasPrefix(name, legacyAssetsPrefix) {
+			continue
+		}
+		relative := strings.TrimPrefix(name, legacyAssetsPrefix)
+		if relative == "" || header.Typeflag == tar.TypeDir {
+			continue
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			return AssetExtraction{}, fmt.Errorf("unsupported archive asset type for %q", name)
+		}
+		if _, duplicate := seen[relative]; duplicate {
+			return AssetExtraction{}, fmt.Errorf("duplicate archive asset %q", name)
+		}
+		seen[relative] = struct{}{}
+		if header.Size < 0 || header.Size > maxAssetFileSize ||
+			result.Bytes+header.Size > maxAssetTotalSize {
+			return AssetExtraction{}, fmt.Errorf("archive asset %q exceeds migration size limit", name)
+		}
+		result.Files++
+		if result.Files > maxAssetFileCount {
+			return AssetExtraction{}, errors.New("backup contains too many legacy asset files")
+		}
 		result.Bytes += header.Size
 	}
 }
@@ -134,6 +215,170 @@ func ExtractLegacyAssets(
 		return AssetExtraction{}, fmt.Errorf("install migrated assets: %w", err)
 	}
 	return extraction, nil
+}
+
+// PreserveLegacyAssets copies every file under telebox/assets into an inert,
+// private directory. Files are never executable and a per-file SHA-256
+// manifest allows future Go plugins to import their original data safely.
+func PreserveLegacyAssets(
+	archivePath string,
+	destination string,
+	sourceSHA256 string,
+) (AssetExtraction, error) {
+	if destination == "" {
+		return AssetExtraction{}, errors.New("legacy asset destination is required")
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return AssetExtraction{}, fmt.Errorf("refusing to overwrite existing legacy asset path %q", destination)
+	} else if !os.IsNotExist(err) {
+		return AssetExtraction{}, fmt.Errorf("inspect legacy asset output path: %w", err)
+	}
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return AssetExtraction{}, fmt.Errorf("create legacy asset parent directory: %w", err)
+	}
+	temp, err := os.MkdirTemp(parent, ".telebox-legacy-assets-*.tmp")
+	if err != nil {
+		return AssetExtraction{}, fmt.Errorf("create legacy asset temp directory: %w", err)
+	}
+	defer os.RemoveAll(temp)
+
+	extraction, files, err := extractAllLegacyAssets(archivePath, temp)
+	if err != nil {
+		return AssetExtraction{}, err
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	manifest := preservedAssetManifest{
+		Format:        "telebox-go-legacy-assets",
+		Version:       1,
+		SourceSHA256:  sourceSHA256,
+		Files:         files,
+		ExtractedFile: extraction.Files,
+		ExtractedByte: extraction.Bytes,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return AssetExtraction{}, fmt.Errorf("encode legacy asset manifest: %w", err)
+	}
+	encoded = append(encoded, '\n')
+	manifestPath, err := availableLegacyManifestPath(temp)
+	if err != nil {
+		return AssetExtraction{}, err
+	}
+	manifestFile, err := os.OpenFile(
+		manifestPath,
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
+		0o600,
+	)
+	if err != nil {
+		return AssetExtraction{}, fmt.Errorf("create legacy asset manifest: %w", err)
+	}
+	_, writeErr := manifestFile.Write(encoded)
+	closeErr := manifestFile.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return AssetExtraction{}, fmt.Errorf("write legacy asset manifest: %w", err)
+	}
+	if err := os.Rename(temp, destination); err != nil {
+		return AssetExtraction{}, fmt.Errorf("install preserved legacy assets: %w", err)
+	}
+	return extraction, nil
+}
+
+func availableLegacyManifestPath(root string) (string, error) {
+	for index := 0; index <= maxAssetFileCount; index++ {
+		name := legacyAssetManifestName
+		if index > 0 {
+			name = fmt.Sprintf("_legacy_manifest.%d.json", index)
+		}
+		candidate := filepath.Join(root, name)
+		if _, err := os.Lstat(candidate); os.IsNotExist(err) {
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("inspect legacy asset manifest path: %w", err)
+		}
+	}
+	return "", errors.New("no available legacy asset manifest filename")
+}
+
+func extractAllLegacyAssets(
+	archivePath string,
+	destination string,
+) (AssetExtraction, []preservedAssetFile, error) {
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		return AssetExtraction{}, nil, fmt.Errorf("open backup assets: %w", err)
+	}
+	defer archive.Close()
+	compressed, err := gzip.NewReader(archive)
+	if err != nil {
+		return AssetExtraction{}, nil, fmt.Errorf("open backup asset gzip stream: %w", err)
+	}
+	defer compressed.Close()
+
+	var result AssetExtraction
+	var files []preservedAssetFile
+	reader := tar.NewReader(compressed)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return result, files, nil
+		}
+		if err != nil {
+			return AssetExtraction{}, nil, fmt.Errorf("read backup assets: %w", err)
+		}
+		name, err := safeArchivePath(header.Name)
+		if err != nil {
+			return AssetExtraction{}, nil, err
+		}
+		if !strings.HasPrefix(name, legacyAssetsPrefix) {
+			continue
+		}
+		relative := strings.TrimPrefix(name, legacyAssetsPrefix)
+		if relative == "" || header.Typeflag == tar.TypeDir {
+			continue
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			return AssetExtraction{}, nil, fmt.Errorf("unsupported archive asset type for %q", name)
+		}
+		if header.Size < 0 || header.Size > maxAssetFileSize ||
+			result.Bytes+header.Size > maxAssetTotalSize {
+			return AssetExtraction{}, nil, fmt.Errorf("archive asset %q exceeds migration size limit", name)
+		}
+		target, err := safeDestinationPath(destination, relative)
+		if err != nil {
+			return AssetExtraction{}, nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return AssetExtraction{}, nil, fmt.Errorf("create legacy asset directory: %w", err)
+		}
+		file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return AssetExtraction{}, nil, fmt.Errorf("create preserved legacy asset %q: %w", relative, err)
+		}
+		hash := sha256.New()
+		written, copyErr := io.CopyN(io.MultiWriter(file, hash), reader, header.Size)
+		closeErr := file.Close()
+		if copyErr != nil || closeErr != nil || written != header.Size {
+			return AssetExtraction{}, nil, fmt.Errorf(
+				"preserve legacy asset %q: %w",
+				relative,
+				errors.Join(copyErr, closeErr),
+			)
+		}
+		result.Files++
+		if result.Files > maxAssetFileCount {
+			return AssetExtraction{}, nil, errors.New("backup contains too many legacy asset files")
+		}
+		result.Bytes += written
+		files = append(files, preservedAssetFile{
+			Path:   filepath.ToSlash(relative),
+			Size:   written,
+			SHA256: hex.EncodeToString(hash.Sum(nil)),
+		})
+	}
 }
 
 func extractSelectedAssets(

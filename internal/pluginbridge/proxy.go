@@ -25,6 +25,7 @@ func NewProxyServices(
 	pluginName string,
 	workDir string,
 	assetsDir string,
+	legacyAssetsDir string,
 	logger *slog.Logger,
 ) (service.Container, error) {
 	if peer == nil {
@@ -47,13 +48,14 @@ func NewProxyServices(
 	}
 	localScheduler := scheduler.New(logger)
 	return service.Container{
-		Logger:    logger,
-		Telegram:  &telegramProxy{peer: peer, workDir: workDir},
-		Storage:   &storageProxy{peer: peer},
-		Tools:     &toolProxy{peer: peer},
-		Scheduler: localScheduler,
-		AssetsDir: assetsDir,
-		HTTP:      &httpProxy{peer: peer},
+		Logger:          logger,
+		Telegram:        &telegramProxy{peer: peer, workDir: workDir},
+		Storage:         &storageProxy{peer: peer},
+		Tools:           &toolProxy{peer: peer},
+		Scheduler:       localScheduler,
+		AssetsDir:       assetsDir,
+		LegacyAssetsDir: legacyAssetsDir,
+		HTTP:            &httpProxy{peer: peer},
 	}, nil
 }
 
