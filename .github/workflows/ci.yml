@@ -22,3 +22,17 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
+      - name: Keep optional plugins out of the core binary
+        shell: bash
+        run: |
+          if go list -deps ./cmd/telebox | grep -q 'TeleBox-Go/plugins/'; then
+            echo "optional plugin package leaked into cmd/telebox" >&2
+            exit 1
+          fi
+      - name: Build a process plugin for Linux targets
+        shell: bash
+        run: |
+          go run ./cmd/telebox-plugin-sdk build \
+            -plugin bin -goos linux -goarch amd64 -output /tmp/plugin-amd64
+          go run ./cmd/telebox-plugin-sdk build \
+            -plugin bin -goos linux -goarch arm64 -output /tmp/plugin-arm64

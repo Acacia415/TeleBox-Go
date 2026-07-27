@@ -1,0 +1,96 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build TeleBox-Go
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          commit="${GITHUB_SHA}"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist/release dist/stage
+
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            package="telebox-go_${version}_${goos}_${goarch}"
+            stage="dist/stage/${package}"
+            mkdir -p "${stage}"
+            suffix=""
+            if [[ "${goos}" == "windows" ]]; then suffix=".exe"; fi
+
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+              go build -trimpath \
+              -ldflags "-s -w \
+                -X github.com/Acacia415/TeleBox-Go/internal/buildinfo.Version=${version} \
+                -X github.com/Acacia415/TeleBox-Go/internal/buildinfo.Commit=${commit} \
+                -X github.com/Acacia415/TeleBox-Go/internal/buildinfo.Date=${built_at}" \
+              -o "${stage}/telebox${suffix}" ./cmd/telebox
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+              go build -trimpath -ldflags "-s -w" \
+              -o "${stage}/telebox-migrate${suffix}" ./cmd/telebox-migrate
+
+            cp config.example.json README.md scripts/install.sh "${stage}/"
+            if [[ "${goos}" == "windows" ]]; then
+              (cd dist/stage && zip -q -r "../release/${package}.zip" "${package}")
+            else
+              tar -C dist/stage -czf "dist/release/${package}.tar.gz" "${package}"
+            fi
+          done
+
+      - name: Build optional plugin packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/telebox-plugin-sdk release \
+            -tag "${GITHUB_REF_NAME}" \
+            -platforms "linux/amd64,linux/arm64,windows/amd64,windows/arm64" \
+            -min-host "${GITHUB_REF_NAME#v}" \
+            -output dist/plugins
+          mv dist/plugins/catalog.json dist/release/plugin-catalog.json
+          mv dist/plugins/*.zip dist/release/
+
+      - name: Write checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist/release && sha256sum * > SHA256SUMS.txt)
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/release/* \
+            --verify-tag \
+            --generate-notes \
+            --title "TeleBox-Go ${GITHUB_REF_NAME}"

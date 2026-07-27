@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +16,8 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/dispatch"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
-	"github.com/Acacia415/TeleBox-Go/internal/plugins"
+	"github.com/Acacia415/TeleBox-Go/internal/pluginmanager"
+	"github.com/Acacia415/TeleBox-Go/internal/pluginmarket"
 	coreplugin "github.com/Acacia415/TeleBox-Go/internal/plugins/core"
 	"github.com/Acacia415/TeleBox-Go/internal/ratelimit"
 	"github.com/Acacia415/TeleBox-Go/internal/scheduler"
@@ -86,17 +88,38 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger, client tel
 		AssetsDir: cfg.Storage.AssetsPath,
 		HTTP:      httpClient,
 	}
-	core := coreplugin.New(services, router, registry)
+	market, err := pluginmarket.New(pluginmarket.Config{
+		Directory:       cfg.Plugins.Directory,
+		CatalogURL:      cfg.Plugins.CatalogURL,
+		MaxArchiveBytes: cfg.Plugins.MaxArchiveBytes,
+	})
+	if err != nil {
+		httpClient.Close()
+		_ = store.Close()
+		return nil, fmt.Errorf("create plugin package manager: %w", err)
+	}
+	packages, err := pluginmanager.New(
+		market,
+		registry,
+		services,
+		filepath.Join(cfg.Storage.AssetsPath, "plugin-runtime"),
+	)
+	if err != nil {
+		httpClient.Close()
+		_ = store.Close()
+		return nil, fmt.Errorf("create plugin controller: %w", err)
+	}
+	core := coreplugin.New(services, router, registry, packages)
 	if err := registry.Add(core); err != nil {
+		httpClient.Close()
 		_ = store.Close()
 		return nil, fmt.Errorf("register core plugin: %w", err)
 	}
-	for _, builtin := range plugins.Builtins(services) {
-		if err := registry.Add(builtin); err != nil {
-			httpClient.Close()
-			_ = store.Close()
-			return nil, fmt.Errorf("register builtin plugin: %w", err)
-		}
+	if err := packages.LoadInstalled(); err != nil {
+		logger.Error(
+			"some installed plugins could not be loaded; continuing",
+			"error", err,
+		)
 	}
 
 	return &App{
@@ -221,7 +244,7 @@ func (a *App) desiredPlugins(ctx context.Context) []string {
 			continue
 		}
 		if _, exists := registered[name]; !exists {
-			a.logger.Warn("configured plugin is not compiled", "plugin", name)
+			a.logger.Warn("configured plugin is not installed", "plugin", name)
 			continue
 		}
 		enabled = append(enabled, name)

@@ -26,6 +26,11 @@ type MessageListener interface {
 	OnMessage(context.Context, telegram.Message) error
 }
 
+type ConditionalMessageListener interface {
+	MessageListener
+	ListensToMessages() bool
+}
+
 type Listener struct {
 	Plugin  string
 	Handler MessageListener

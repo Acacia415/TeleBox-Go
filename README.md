@@ -1,29 +1,23 @@
 # TeleBox-Go
 
-TeleBox 的 Go 重构版本。项目采用 `gotd/td` 连接 Telegram，插件以 Go
-包的形式编译进单一可执行文件，并通过配置在运行时启用或停用。
+TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内置
+核心管理功能；业务插件作为独立进程按需安装、更新和卸载。框架、官方
+插件源码和插件目录仍维护在同一个仓库中。
 
-原有 Node/TypeScript 项目和全量备份是迁移输入，不会被本项目原地修改。
+原有 Node/TypeScript 项目和全量备份只是迁移输入，本项目不会原地修改它们。
 
 ## 当前状态
 
-- [x] 配置模型和环境变量覆盖
-- [x] 结构化日志
-- [x] 命令解析、权限检查和路由
-- [x] 插件注册、启停和生命周期
-- [x] 核心管理命令骨架
+- [x] 配置、日志、命令路由和所有者权限
 - [x] `gotd/td` 会话、QR 登录、更新补洞和 peer 解析
-- [x] SQLite 基础存储与 schema migration
-- [x] 受限外部程序执行器
-- [x] 可取消任务调度和统一关闭顺序
-- [x] 只读备份检查与 GramJS/Telethon 会话转换器
-- [x] Telegram 消息、媒体和常用管理操作
-- [x] 备份内目标插件资产的安全提取与迁移清单
-- [x] 备份中的 27 个插件全部完成 Go 移植
+- [x] SQLite 存储、迁移器、任务调度和统一关闭流程
+- [x] 全量备份中的 27 个插件全部完成 Go 移植
+- [x] 可校验的插件目录、按平台安装和独立进程运行
+- [x] Linux amd64/arm64 一键安装与 systemd 用户服务
 - [ ] 旧插件业务数据库的逐插件转换（AI、SpeedLink、Telegram Backup 已兼容）
-- [ ] 隔离账号 Telegram 端到端验收
+- [ ] Linux 隔离账号端到端验收
 
-已完成的业务插件（仅包含全量备份实际安装的插件）：
+本仓库只提供全量备份中实际安装过的插件：
 
 - 查询与工具：`bin`、`convert`、`dc`、`dig`、`ids`、`ip`、`isalive`、
   `jointime`、`rate`、`search`、`trace`
@@ -34,10 +28,41 @@ TeleBox 的 Go 重构版本。项目采用 `gotd/td` 连接 Telegram，插件以
 
 完整进度见 [重构计划](docs/refactor-plan.md)。
 
-## 下载和运行
+## Linux 一键安装
 
-可从 [GitHub Releases](https://github.com/Acacia415/TeleBox-Go/releases)
-下载对应平台的压缩包。解压后复制示例配置并填入自己的 Telegram API：
+默认安装到当前用户目录，不需要 root：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/install.sh | sh
+```
+
+安装器会识别 `amd64` 或 `arm64`、校验发布包 SHA-256，并创建 systemd
+用户服务。首次安装后编辑：
+
+```text
+~/.config/telebox/telebox.env
+```
+
+填入 `TELEBOX_API_ID` 和 `TELEBOX_API_HASH`，再启动：
+
+```bash
+systemctl --user enable --now telebox
+journalctl --user -u telebox -f
+```
+
+也可以在安装时传入环境变量，或仅安装不启动：
+
+```bash
+TELEBOX_API_ID=123456 TELEBOX_API_HASH=... sh install.sh
+sh install.sh --version v0.2.0 --no-start
+```
+
+首次登录生成的二维码图片位于数据目录，日志会显示完整路径。
+
+## 手动运行
+
+从 [GitHub Releases](https://github.com/Acacia415/TeleBox-Go/releases)
+下载对应平台的压缩包：
 
 ```bash
 cp config.example.json config.json
@@ -45,7 +70,7 @@ cp config.example.json config.json
 ./telebox -config config.json
 ```
 
-Windows PowerShell 使用：
+Windows PowerShell：
 
 ```powershell
 Copy-Item config.example.json config.json
@@ -53,25 +78,60 @@ Copy-Item config.example.json config.json
 .\telebox.exe -config .\config.json
 ```
 
-首次启动可使用二维码登录。`yt-dlp`、音视频转换和测速等插件还需要安装
-各自调用的上游命令行工具。
+## 命令和插件
 
-## 目录
+默认命令前缀是 `-`。插件管理器的正式名称是 `tpm`，同时提供短别名
+`p`、`t`，并保留 `plugins`、`plugin` 兼容别名：
 
 ```text
-cmd/telebox/          主程序
-internal/app/         应用装配和生命周期
-internal/command/     命令解析与路由
-internal/config/      配置读取、校验和路径解析
-internal/plugin/      插件契约与注册表
-internal/plugins/     内置及迁移后的插件
-internal/telegram/    Telegram 抽象和 gotd 适配器
-docs/                 架构与迁移清单
+-p ls                 查看已安装插件
+-p s [关键词]         搜索插件
+-p i bin              安装并启用插件
+-p i all              安装全部官方插件
+-p i bin@0.1.0        安装指定版本
+-p u [插件名]         更新一个或全部插件
+-p rm bin             停用并卸载插件
+-p on bin             启用插件
+-p off bin            停用插件
+-p doctor             检查插件目录
 ```
+
+`-t`、`-tpm` 与 `-p` 完全等价。前缀仍可自定义，并且可以同时保留多个：
+
+```text
+-prefix show
+-prefix set - .
+-prefix add !
+-prefix remove .
+```
+
+主程序初次安装不携带业务插件。通过 `-p i` 下载的压缩包会经过 HTTPS、
+大小限制和 SHA-256 校验，再安装到配置的插件目录。每个插件运行在独立
+子进程中；一个插件退出不会带崩 TeleBox，下一次调用会自动重新启动它。
+
+`yt-dlp`、音视频转换和测速等插件仍需要系统中存在相应的上游命令行工具。
+
+## 项目目录
+
+```text
+cmd/telebox/                 主程序入口
+cmd/telebox-migrate/         备份迁移工具入口
+cmd/telebox-plugin-sdk/      官方插件构建与发布工具入口
+internal/app/                应用装配和生命周期
+internal/plugin*/            注册表、安装器、RPC 和子进程运行时
+internal/plugins/core/       唯一内置插件
+pkg/pluginapi/               稳定的插件清单与目录协议
+plugins/                     全量备份中的官方插件源码
+scripts/install.sh           Linux 一键安装脚本
+docs/                        架构与迁移文档
+```
+
+`cmd` 是 Go 社区约定，表示“可执行程序入口”，与 Windows 的 `cmd.exe`
+没有关系。业务逻辑不会放在这里。
 
 ## 本地开发
 
-需要 Go 1.26 或更新版本。
+需要 Go 1.26 或更新版本：
 
 ```bash
 cp config.example.json config.json
@@ -79,10 +139,23 @@ go test ./...
 go run ./cmd/telebox -config config.json -check-config
 ```
 
-`config.example.json` 默认列出全部 27 个已移植插件。可以从 `enabled`
-移到 `disabled`，也可以运行后通过核心插件管理命令持久化启停状态。
+构建单个官方插件：
 
-可以使用环境变量覆盖敏感配置：
+```bash
+go run ./cmd/telebox-plugin-sdk build \
+  -plugin bin -goos linux -goarch amd64 -output .build/bin
+```
+
+生成整个插件发布目录和带校验值的目录文件：
+
+```bash
+go run ./cmd/telebox-plugin-sdk release \
+  -tag v0.2.0 \
+  -platforms linux/amd64,linux/arm64 \
+  -output dist/plugins
+```
+
+配置可用以下环境变量覆盖，敏感值不必写入 JSON：
 
 ```text
 TELEBOX_API_ID
@@ -91,12 +164,11 @@ TELEBOX_SESSION_FILE
 TELEBOX_LOGIN_MODE
 TELEBOX_STORAGE_PATH
 TELEBOX_ASSETS_PATH
+TELEBOX_PLUGIN_DIR
+TELEBOX_PLUGIN_CATALOG
 TELEBOX_LOG_LEVEL
 TELEBOX_LOG_FORMAT
 ```
-
-主程序已接入 `gotd/td`。首次启动可使用 QR 登录；从旧版迁移时使用
-`telebox-migrate` 生成的现有会话，避免重新登录。
 
 ## 检查和转换旧备份
 
@@ -106,8 +178,8 @@ TELEBOX_LOG_FORMAT
 go run ./cmd/telebox-migrate inspect -archive /path/to/backup.tar.gz
 ```
 
-转换默认是 dry-run。只有显式增加 `-apply` 才会创建新配置和 gotd
-session，并且拒绝覆盖已有文件：
+转换默认是 dry-run，只有增加 `-apply` 才会写入新目录，并且拒绝覆盖
+已有文件：
 
 ```bash
 go run ./cmd/telebox-migrate convert \
@@ -118,6 +190,4 @@ go run ./cmd/telebox-migrate convert \
   -apply
 ```
 
-迁移器只读取原压缩包并写入新的 Go 配置、会话和资产目录，不会修改
-TypeScript 原项目或备份包。`ai_config.db`、SpeedLink 数据以及
-`telegram-backup/telegram_backup.db` 会在对应插件首次启动时按兼容规则读取。
+迁移器只读取原压缩包，不会修改 TypeScript 项目或备份包。

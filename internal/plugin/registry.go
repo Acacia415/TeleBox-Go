@@ -103,6 +103,28 @@ func (r *Registry) Disable(ctx context.Context, name string) error {
 	return nil
 }
 
+// Remove stops an enabled plugin and removes it from the registry. The core
+// plugin is intentionally permanent because it owns the administration
+// commands used to recover the installation.
+func (r *Registry) Remove(ctx context.Context, name string) error {
+	name = normalizeName(name)
+	if name == "core" {
+		return errors.New("core plugin cannot be removed")
+	}
+	if err := r.Disable(ctx, name); err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.entries[name]; !exists {
+		return fmt.Errorf("plugin %q is not registered", name)
+	}
+	delete(r.entries, name)
+	r.removeFromOrder(name)
+	return nil
+}
+
 func (r *Registry) Shutdown(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -162,6 +184,10 @@ func (r *Registry) MessageListeners() []Listener {
 			continue
 		}
 		if listener, ok := item.plugin.(MessageListener); ok {
+			if conditional, ok := listener.(ConditionalMessageListener); ok &&
+				!conditional.ListensToMessages() {
+				continue
+			}
 			result = append(result, Listener{Plugin: name, Handler: listener})
 		}
 	}

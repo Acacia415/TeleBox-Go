@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,8 +57,11 @@ type HTTPConfig struct {
 }
 
 type PluginConfig struct {
-	Enabled  []string `json:"enabled"`
-	Disabled []string `json:"disabled"`
+	Enabled         []string `json:"enabled"`
+	Disabled        []string `json:"disabled"`
+	Directory       string   `json:"directory"`
+	CatalogURL      string   `json:"catalog_url"`
+	MaxArchiveBytes int64    `json:"max_archive_bytes"`
 }
 
 type LoggingConfig struct {
@@ -72,7 +76,7 @@ func Default() Config {
 			LoginMode:   "existing",
 		},
 		Commands: CommandConfig{
-			Prefixes:            []string{"."},
+			Prefixes:            []string{"-"},
 			OwnerIDs:            []int64{},
 			MaxConcurrent:       8,
 			QueueCapacity:       128,
@@ -91,8 +95,11 @@ func Default() Config {
 			MaxResponseBytes: 8 << 20,
 		},
 		Plugins: PluginConfig{
-			Enabled:  []string{},
-			Disabled: []string{},
+			Enabled:         []string{},
+			Disabled:        []string{},
+			Directory:       "data/plugins",
+			CatalogURL:      "https://github.com/Acacia415/TeleBox-Go/releases/latest/download/plugin-catalog.json",
+			MaxArchiveBytes: 128 << 20,
 		},
 		Logging: LoggingConfig{
 			Level:  "info",
@@ -175,6 +182,19 @@ func (c Config) Validate() error {
 	if c.HTTP.MaxResponseBytes <= 0 {
 		problems = append(problems, "http.max_response_bytes must be greater than zero")
 	}
+	if strings.TrimSpace(c.Plugins.Directory) == "" {
+		problems = append(problems, "plugins.directory is required")
+	}
+	if c.Plugins.MaxArchiveBytes <= 0 {
+		problems = append(problems, "plugins.max_archive_bytes must be greater than zero")
+	}
+	if parsed, err := url.Parse(c.Plugins.CatalogURL); err != nil {
+		problems = append(problems, "plugins.catalog_url is invalid")
+	} else if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		problems = append(problems,
+			"plugins.catalog_url must be an HTTPS URL without credentials",
+		)
+	}
 	if len(c.Commands.Prefixes) == 0 {
 		problems = append(problems, "commands.prefixes must contain at least one prefix")
 	}
@@ -224,6 +244,7 @@ func (c *Config) resolvePaths(baseDir string) {
 	c.Telegram.SessionFile = resolvePath(baseDir, c.Telegram.SessionFile)
 	c.Storage.Path = resolvePath(baseDir, c.Storage.Path)
 	c.Storage.AssetsPath = resolvePath(baseDir, c.Storage.AssetsPath)
+	c.Plugins.Directory = resolvePath(baseDir, c.Plugins.Directory)
 }
 
 func resolvePath(baseDir, path string) string {
@@ -252,6 +273,12 @@ func applyEnvironment(cfg *Config) error {
 	}
 	if value, ok := os.LookupEnv("TELEBOX_ASSETS_PATH"); ok {
 		cfg.Storage.AssetsPath = value
+	}
+	if value, ok := os.LookupEnv("TELEBOX_PLUGIN_DIR"); ok {
+		cfg.Plugins.Directory = value
+	}
+	if value, ok := os.LookupEnv("TELEBOX_PLUGIN_CATALOG"); ok {
+		cfg.Plugins.CatalogURL = strings.TrimSpace(value)
 	}
 	if value, ok := os.LookupEnv("TELEBOX_LOGIN_MODE"); ok {
 		cfg.Telegram.LoginMode = strings.ToLower(strings.TrimSpace(value))

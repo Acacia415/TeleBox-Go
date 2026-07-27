@@ -7,7 +7,7 @@
   },
   "commands": {
     "prefixes": [
-      "."
+      "-"
     ],
     "owner_ids": [],
     "max_concurrent": 8,
@@ -27,36 +27,11 @@
     "max_response_bytes": 8388608
   },
   "plugins": {
-    "enabled": [
-      "aban",
-      "ai",
-      "bin",
-      "bulk_delete",
-      "cezi",
-      "convert",
-      "dc",
-      "dig",
-      "eat",
-      "eatgif",
-      "gif",
-      "ids",
-      "ip",
-      "isalive",
-      "jointime",
-      "music_bot",
-      "nsticker",
-      "rate",
-      "re",
-      "search",
-      "speedlink",
-      "speedtest",
-      "telegram-backup",
-      "trace",
-      "yt-dlp",
-      "yvlu",
-      "zhijiao"
-    ],
-    "disabled": []
+    "enabled": [],
+    "disabled": [],
+    "directory": "data/plugins",
+    "catalog_url": "https://github.com/Acacia415/TeleBox-Go/releases/latest/download/plugin-catalog.json",
+    "max_archive_bytes": 134217728
   },
   "logging": {
     "level": "info",

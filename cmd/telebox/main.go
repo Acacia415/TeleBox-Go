@@ -16,15 +16,10 @@ import (
 	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/app"
+	"github.com/Acacia415/TeleBox-Go/internal/buildinfo"
 	"github.com/Acacia415/TeleBox-Go/internal/config"
 	gotdclient "github.com/Acacia415/TeleBox-Go/internal/telegram/gotd"
 	"rsc.io/qr"
-)
-
-var (
-	version = "dev"
-	commit  = "unknown"
-	date    = "unknown"
 )
 
 func main() {
@@ -42,7 +37,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *showVersion {
-		fmt.Fprintf(stdout, "telebox %s commit=%s built=%s\n", version, commit, date)
+		fmt.Fprintf(
+			stdout,
+			"telebox %s commit=%s built=%s\n",
+			buildinfo.Version,
+			buildinfo.Commit,
+			buildinfo.Date,
+		)
 		return 0
 	}
 
