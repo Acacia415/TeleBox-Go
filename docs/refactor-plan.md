@@ -40,6 +40,17 @@
 - [x] `speedlink`
 - [x] `speedtest`
 - [x] `telegram-backup`
+
+## 第三阶段：插件模块化与 Linux 发布
+
+- [x] 主程序仅保留 core 插件
+- [x] `tpm`/`p`/`t` 短命令与默认 `-` 前缀
+- [x] 多前缀配置和运行时持久化
+- [x] 进程隔离插件协议与自动重启
+- [x] HTTPS、SHA-256 和安全解包安装器
+- [x] monorepo 插件 SDK 与跨平台目录生成
+- [x] Linux amd64/arm64 一键安装脚本
+- [ ] Linux 隔离账号逐插件端到端验收
 - [x] `trace`
 - [x] `yt-dlp`
 - [x] `yvlu`

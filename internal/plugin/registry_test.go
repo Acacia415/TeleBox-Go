@@ -89,3 +89,32 @@ func TestRegistryRollsBackFailedStart(t *testing.T) {
 		t.Fatalf("status = %+v, want disabled", status)
 	}
 }
+
+func TestRegistryRemove(t *testing.T) {
+	t.Parallel()
+
+	router, err := command.NewRouter([]string{"-"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(router)
+	candidate := &fakePlugin{name: "optional"}
+	if err := registry.Add(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Enable(context.Background(), "optional"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Remove(context.Background(), "optional"); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := registry.Status("optional"); exists {
+		t.Fatal("removed plugin is still registered")
+	}
+	if candidate.stopped != 1 {
+		t.Fatalf("Stop() calls = %d, want 1", candidate.stopped)
+	}
+	if err := registry.Remove(context.Background(), "core"); err == nil {
+		t.Fatal("Remove(core) error = nil")
+	}
+}
