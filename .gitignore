@@ -1,0 +1,9 @@
+/bin/
+/dist/
+/data/
+/tmp/
+/config.json
+/config.e2e.json
+*.log
+*.prof
+coverage.out

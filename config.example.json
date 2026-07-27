@@ -1,0 +1,65 @@
+{
+  "telegram": {
+    "api_id": 0,
+    "api_hash": "",
+    "session_file": "data/session.json",
+    "login_mode": "existing"
+  },
+  "commands": {
+    "prefixes": [
+      "."
+    ],
+    "owner_ids": [],
+    "max_concurrent": 8,
+    "queue_capacity": 128,
+    "per_sender_interval_ms": 250
+  },
+  "storage": {
+    "path": "data/telebox.db",
+    "assets_path": "data/assets"
+  },
+  "tools": {
+    "max_concurrent": 4
+  },
+  "http": {
+    "timeout_seconds": 30,
+    "max_concurrent": 16,
+    "max_response_bytes": 8388608
+  },
+  "plugins": {
+    "enabled": [
+      "aban",
+      "ai",
+      "bin",
+      "bulk_delete",
+      "cezi",
+      "convert",
+      "dc",
+      "dig",
+      "eat",
+      "eatgif",
+      "gif",
+      "ids",
+      "ip",
+      "isalive",
+      "jointime",
+      "music_bot",
+      "nsticker",
+      "rate",
+      "re",
+      "search",
+      "speedlink",
+      "speedtest",
+      "telegram-backup",
+      "trace",
+      "yt-dlp",
+      "yvlu",
+      "zhijiao"
+    ],
+    "disabled": []
+  },
+  "logging": {
+    "level": "info",
+    "format": "text"
+  }
+}

@@ -1,0 +1,656 @@
+package ytdlp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/Acacia415/TeleBox-Go/internal/command"
+	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
+	"github.com/Acacia415/TeleBox-Go/internal/plugin"
+	"github.com/Acacia415/TeleBox-Go/internal/service"
+	"github.com/Acacia415/TeleBox-Go/internal/telegram"
+	"github.com/Acacia415/TeleBox-Go/internal/toolrunner"
+)
+
+const (
+	defaultGeminiBase  = "https://generativelanguage.googleapis.com"
+	defaultGeminiModel = "gemini-3.6-flash"
+)
+
+type songInfo struct {
+	Title    string
+	Artist   string
+	Album    string
+	Duration time.Duration
+	URL      string
+}
+
+type Plugin struct {
+	services service.Container
+	workDir  string
+	mu       sync.Mutex
+}
+
+func New(services service.Container) *Plugin {
+	return &Plugin{
+		services: services,
+		workDir:  filepath.Join(os.TempDir(), "telebox-go-ytdlp"),
+	}
+}
+
+func (p *Plugin) Metadata() plugin.Metadata {
+	return plugin.Metadata{
+		Name:        "yt-dlp",
+		Version:     "0.1.0",
+		Description: "使用 yt-dlp 搜索并下载 YouTube 音乐",
+	}
+}
+
+func (p *Plugin) Commands() []command.Definition {
+	return []command.Definition{{
+		Name:        "yt",
+		Description: "搜索并下载 YouTube 音乐",
+		OwnerOnly:   true,
+		Handler:     p.handle,
+	}}
+}
+
+func (p *Plugin) Start(context.Context) error {
+	return os.MkdirAll(p.workDir, 0o700)
+}
+
+func (p *Plugin) Stop(context.Context) error { return nil }
+
+func (p *Plugin) handle(ctx context.Context, request command.Request) error {
+	if len(request.Args) == 0 {
+		return p.respond(ctx, request, helpText(request.Prefix))
+	}
+	switch strings.ToLower(request.Args[0]) {
+	case "update":
+		return p.update(ctx, request)
+	case "apikey":
+		return p.configure(ctx, request, "api_key", true)
+	case "baseurl":
+		return p.configureBaseURL(ctx, request)
+	case "model":
+		return p.configure(ctx, request, "model", false)
+	case "binary":
+		return p.configureBinary(ctx, request)
+	case "clear":
+		return p.clear(ctx, request)
+	}
+	return p.download(ctx, request, strings.TrimSpace(strings.Join(request.Args, " ")))
+}
+
+func (p *Plugin) download(
+	ctx context.Context,
+	request command.Request,
+	query string,
+) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	executable, err := p.findExecutable(ctx)
+	if err != nil {
+		return p.respond(ctx, request, installHint(request.Prefix))
+	}
+	if _, err := p.services.Tools.LookPath("ffmpeg"); err != nil {
+		return p.respond(ctx, request, "❌ 未找到 FFmpeg；yt-dlp 音频转换需要 ffmpeg")
+	}
+	jobDir, err := os.MkdirTemp(p.workDir, "job-*")
+	if err != nil {
+		return p.respond(ctx, request, "❌ 创建下载目录失败："+err.Error())
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(jobDir); cleanupErr != nil {
+			p.services.Logger.Warn("remove yt-dlp job", "path", jobDir, "error", cleanupErr)
+		}
+	}()
+
+	title, artist, manual := parseManual(query)
+	searchQuery := query
+	if !manual {
+		if apiKey, _ := p.read(ctx, "api_key"); apiKey != "" {
+			if err := p.respond(ctx, request, "⏳ 识别歌曲信息…"); err != nil {
+				return err
+			}
+			identified, identifyErr := p.identify(ctx, query, apiKey)
+			if identifyErr == nil {
+				title, artist = identified.Title, identified.Artist
+				searchQuery = strings.TrimSpace(artist + " " + title)
+			} else {
+				p.services.Logger.Warn("yt-dlp Gemini metadata fallback", "error", identifyErr)
+			}
+		}
+	}
+	if err := p.respond(ctx, request, "⏳ 搜索歌曲…"); err != nil {
+		return err
+	}
+	video, err := p.videoInfo(ctx, executable, searchQuery)
+	if err != nil {
+		return p.respond(ctx, request, "❌ 未找到可下载的歌曲："+shortError(err))
+	}
+	if title == "" || artist == "" {
+		parsedTitle, parsedArtist := parseVideoTitle(video.Title, video.Artist)
+		if title == "" {
+			title = parsedTitle
+		}
+		if artist == "" {
+			artist = parsedArtist
+		}
+	}
+	video.Title = fallback(title, video.Title)
+	video.Artist = fallback(artist, video.Artist)
+
+	if err := p.respond(
+		ctx,
+		request,
+		"⏳ 下载："+video.Title+"\n• 艺术家："+fallback(video.Artist, "未知"),
+	); err != nil {
+		return err
+	}
+	outputTemplate := filepath.Join(jobDir, "%(id)s.%(ext)s")
+	result, runErr := p.services.Tools.Run(ctx, toolrunner.Command{
+		Name: executable,
+		Args: []string{
+			video.URL,
+			"--no-playlist",
+			"--no-warnings",
+			"-x",
+			"--audio-format", "mp3",
+			"--audio-quality", "0",
+			"--embed-thumbnail",
+			"--convert-thumbnails", "jpg",
+			"--embed-metadata",
+			"--max-filesize", "512M",
+			"-o", outputTemplate,
+			"--print", "after_move:filepath",
+		},
+		Directory: jobDir,
+		Timeout:   10 * time.Minute,
+		MaxOutput: 256 << 10,
+	})
+	if runErr != nil {
+		detail := shortToolError(result.Stderr, runErr)
+		if strings.Contains(strings.ToLower(detail), "403") {
+			detail += "\n请先运行 " + request.Prefix + "yt update 更新 yt-dlp"
+		}
+		return p.respond(ctx, request, "❌ yt-dlp 下载失败："+detail)
+	}
+	audioPath := findOutputPath(jobDir, result.Stdout)
+	if audioPath == "" {
+		return p.respond(ctx, request, "❌ yt-dlp 未生成 MP3 文件")
+	}
+	if err := p.respond(ctx, request, "⏳ 上传音频…"); err != nil {
+		return err
+	}
+	fileName := safeFilename(video.Title) + " - " + safeFilename(video.Artist)
+	fileName = strings.Trim(fileName, " -.") + ".mp3"
+	if fileName == ".mp3" {
+		fileName = "music.mp3"
+	}
+	_, err = p.services.Telegram.SendFile(ctx, request.Message.ChatID, telegram.Upload{
+		Path:       audioPath,
+		FileName:   fileName,
+		MIMEType:   "audio/mpeg",
+		Caption:    "🎵 " + video.Title + "\n👤 " + fallback(video.Artist, "未知艺术家"),
+		ReplyToID:  request.Message.ID,
+		Kind:       telegram.MediaAudio,
+		Duration:   video.Duration,
+		AudioTitle: video.Title,
+		Performer:  video.Artist,
+	})
+	if err != nil {
+		return p.respond(ctx, request, "❌ 上传音频失败："+err.Error())
+	}
+	if request.Message.Outgoing {
+		return p.services.Telegram.DeleteMessages(
+			ctx,
+			request.Message.ChatID,
+			[]int{request.Message.ID},
+		)
+	}
+	return nil
+}
+
+func (p *Plugin) videoInfo(
+	ctx context.Context,
+	executable string,
+	query string,
+) (songInfo, error) {
+	result, err := p.services.Tools.Run(ctx, toolrunner.Command{
+		Name: executable,
+		Args: []string{
+			"ytsearch1:" + query,
+			"--no-playlist",
+			"--no-download",
+			"--no-warnings",
+			"--print", "%(title)s\t%(uploader)s\t%(duration)s\t%(webpage_url)s",
+		},
+		Timeout:   2 * time.Minute,
+		MaxOutput: 128 << 10,
+	})
+	if err != nil {
+		return songInfo{}, errors.New(shortToolError(result.Stderr, err))
+	}
+	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
+	if len(lines) == 0 {
+		return songInfo{}, errors.New("yt-dlp 未返回搜索结果")
+	}
+	parts := strings.Split(strings.TrimSpace(lines[len(lines)-1]), "\t")
+	if len(parts) < 4 || strings.TrimSpace(parts[3]) == "" {
+		return songInfo{}, errors.New("yt-dlp 返回的歌曲信息不完整")
+	}
+	seconds, _ := strconv.ParseFloat(parts[2], 64)
+	return songInfo{
+		Title:    strings.TrimSpace(parts[0]),
+		Artist:   strings.TrimSpace(parts[1]),
+		Duration: time.Duration(seconds * float64(time.Second)),
+		URL:      strings.TrimSpace(parts[3]),
+	}, nil
+}
+
+func (p *Plugin) identify(
+	ctx context.Context,
+	query string,
+	apiKey string,
+) (songInfo, error) {
+	model, _ := p.read(ctx, "model")
+	model = fallback(model, defaultGeminiModel)
+	baseURL, _ := p.read(ctx, "base_url")
+	baseURL = strings.TrimRight(fallback(baseURL, defaultGeminiBase), "/")
+	body, err := json.Marshal(map[string]any{
+		"systemInstruction": map[string]any{
+			"parts": []map[string]string{{
+				"text": "你是音乐信息专家。只返回 JSON，字段为 title、artist、album；未知填“未知”。",
+			}},
+		},
+		"contents": []map[string]any{{
+			"role": "user",
+			"parts": []map[string]string{{
+				"text": "识别并校正这首歌，优先最知名版本：" + query,
+			}},
+		}},
+		"generationConfig": map[string]any{
+			"responseMimeType": "application/json",
+			"temperature":      0.2,
+		},
+	})
+	if err != nil {
+		return songInfo{}, err
+	}
+	endpoint := baseURL + "/v1beta/models/" + url.PathEscape(model) + ":generateContent"
+	response, err := p.services.HTTP.Do(ctx, httpclient.Request{
+		Method: http.MethodPost,
+		URL:    endpoint,
+		Headers: http.Header{
+			"x-goog-api-key": []string{apiKey},
+			"Content-Type":   []string{"application/json"},
+		},
+		Body: body,
+	})
+	if err != nil {
+		return songInfo{}, err
+	}
+	var payload struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body, &payload); err != nil {
+		return songInfo{}, fmt.Errorf("解析 Gemini 响应：%w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return songInfo{}, errors.New(fallback(payload.Error.Message,
+			fmt.Sprintf("Gemini HTTP %d", response.StatusCode)))
+	}
+	if len(payload.Candidates) == 0 || len(payload.Candidates[0].Content.Parts) == 0 {
+		return songInfo{}, errors.New("Gemini 未返回歌曲信息")
+	}
+	return parseAIInfo(payload.Candidates[0].Content.Parts[0].Text, query)
+}
+
+func (p *Plugin) update(ctx context.Context, request command.Request) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	executable, err := p.findExecutable(ctx)
+	if err != nil {
+		return p.respond(ctx, request, installHint(request.Prefix))
+	}
+	if err := p.respond(ctx, request, "⏳ 更新 yt-dlp…"); err != nil {
+		return err
+	}
+	result, err := p.services.Tools.Run(ctx, toolrunner.Command{
+		Name: executable, Args: []string{"-U"}, Timeout: 3 * time.Minute, MaxOutput: 128 << 10,
+	})
+	if err != nil {
+		return p.respond(ctx, request, "❌ 更新失败："+shortToolError(result.Stderr, err))
+	}
+	version, versionErr := p.services.Tools.Run(ctx, toolrunner.Command{
+		Name: executable, Args: []string{"--version"}, Timeout: 30 * time.Second,
+	})
+	if versionErr != nil {
+		return p.respond(ctx, request, "✅ yt-dlp 更新命令执行完成")
+	}
+	return p.respond(ctx, request, "✅ yt-dlp 已更新\n当前版本："+strings.TrimSpace(version.Stdout))
+}
+
+func (p *Plugin) configure(
+	ctx context.Context,
+	request command.Request,
+	key string,
+	secret bool,
+) error {
+	label := "Gemini 模型"
+	defaultValue := defaultGeminiModel
+	if key == "api_key" {
+		label = "Gemini API Key"
+		defaultValue = ""
+	}
+	if len(request.Args) == 1 {
+		value, _ := p.read(ctx, key)
+		value = fallback(value, defaultValue)
+		if value == "" {
+			return p.respond(ctx, request, "❌ 尚未设置 "+label)
+		}
+		if secret {
+			value = maskSecret(value)
+		}
+		return p.respond(ctx, request, label+"："+value)
+	}
+	value := strings.TrimSpace(strings.Join(request.Args[1:], " "))
+	if strings.EqualFold(value, "clear") {
+		if err := p.services.Storage.Delete(ctx, "yt-dlp", key); err != nil {
+			return p.respond(ctx, request, "❌ 清除配置失败："+err.Error())
+		}
+		return p.respond(ctx, request, "✅ 已清除 "+label)
+	}
+	if value == "" || (!secret && strings.ContainsAny(value, " \t\r\n")) {
+		return p.respond(ctx, request, "❌ 配置值无效")
+	}
+	if err := p.write(ctx, key, value); err != nil {
+		return p.respond(ctx, request, "❌ 保存配置失败："+err.Error())
+	}
+	if secret {
+		value = maskSecret(value)
+	}
+	return p.respond(ctx, request, "✅ 已保存 "+label+"："+value)
+}
+
+func (p *Plugin) configureBaseURL(ctx context.Context, request command.Request) error {
+	if len(request.Args) == 1 {
+		value, _ := p.read(ctx, "base_url")
+		return p.respond(ctx, request, "Gemini API 地址："+fallback(value, defaultGeminiBase))
+	}
+	value := strings.TrimRight(strings.TrimSpace(request.Args[1]), "/")
+	if strings.EqualFold(value, "clear") {
+		if err := p.services.Storage.Delete(ctx, "yt-dlp", "base_url"); err != nil {
+			return p.respond(ctx, request, "❌ 清除地址失败："+err.Error())
+		}
+		return p.respond(ctx, request, "✅ 已恢复 Gemini 官方 API 地址")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") ||
+		parsed.Hostname() == "" || parsed.User != nil {
+		return p.respond(ctx, request, "❌ 请输入有效的 HTTP(S) API 地址")
+	}
+	if err := p.write(ctx, "base_url", value); err != nil {
+		return p.respond(ctx, request, "❌ 保存地址失败："+err.Error())
+	}
+	return p.respond(ctx, request, "✅ Gemini API 地址已设置："+value)
+}
+
+func (p *Plugin) configureBinary(ctx context.Context, request command.Request) error {
+	if len(request.Args) == 1 {
+		executable, err := p.findExecutable(ctx)
+		if err != nil {
+			return p.respond(ctx, request, installHint(request.Prefix))
+		}
+		return p.respond(ctx, request, "yt-dlp 路径："+executable)
+	}
+	value := strings.TrimSpace(strings.Join(request.Args[1:], " "))
+	if strings.EqualFold(value, "auto") || strings.EqualFold(value, "clear") {
+		if err := p.services.Storage.Delete(ctx, "yt-dlp", "binary"); err != nil {
+			return p.respond(ctx, request, "❌ 清除路径失败："+err.Error())
+		}
+		return p.respond(ctx, request, "✅ 已恢复自动查找 yt-dlp")
+	}
+	info, err := os.Stat(value)
+	if err != nil || info.IsDir() {
+		return p.respond(ctx, request, "❌ yt-dlp 文件不存在")
+	}
+	if err := p.write(ctx, "binary", value); err != nil {
+		return p.respond(ctx, request, "❌ 保存路径失败："+err.Error())
+	}
+	return p.respond(ctx, request, "✅ yt-dlp 路径已保存")
+}
+
+func (p *Plugin) clear(ctx context.Context, request command.Request) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := os.RemoveAll(p.workDir); err != nil {
+		return p.respond(ctx, request, "❌ 清理下载目录失败："+err.Error())
+	}
+	if err := os.MkdirAll(p.workDir, 0o700); err != nil {
+		return p.respond(ctx, request, "❌ 重建下载目录失败："+err.Error())
+	}
+	return p.respond(ctx, request, "✅ yt-dlp 临时文件已清理")
+}
+
+func (p *Plugin) findExecutable(ctx context.Context) (string, error) {
+	if configured, _ := p.read(ctx, "binary"); configured != "" {
+		if info, err := os.Stat(configured); err == nil && !info.IsDir() {
+			return configured, nil
+		}
+	}
+	names := []string{"yt-dlp"}
+	if runtime.GOOS == "windows" {
+		names = []string{"yt-dlp.exe", "yt-dlp"}
+	}
+	for _, name := range names {
+		if p.services.AssetsDir != "" {
+			candidates := []string{
+				filepath.Join(p.services.AssetsDir, "ytdlp", name),
+				filepath.Join(p.services.AssetsDir, name),
+			}
+			for _, candidate := range candidates {
+				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+					return candidate, nil
+				}
+			}
+		}
+		if executable, err := p.services.Tools.LookPath(name); err == nil {
+			return executable, nil
+		}
+	}
+	return "", toolrunner.ErrExecutableNotFound
+}
+
+func (p *Plugin) read(ctx context.Context, key string) (string, error) {
+	value, err := p.services.Storage.Get(ctx, "yt-dlp", key)
+	return string(value), err
+}
+
+func (p *Plugin) write(ctx context.Context, key, value string) error {
+	return p.services.Storage.Put(ctx, "yt-dlp", key, []byte(value))
+}
+
+func (p *Plugin) respond(ctx context.Context, request command.Request, text string) error {
+	if request.Message.Outgoing {
+		_, err := p.services.Telegram.EditText(
+			ctx, request.Message.ChatID, request.Message.ID, text,
+		)
+		return err
+	}
+	_, err := p.services.Telegram.ReplyText(
+		ctx, request.Message.ChatID, request.Message.ID, text,
+	)
+	return err
+}
+
+func parseManual(query string) (title, artist string, ok bool) {
+	for _, separator := range []string{" - ", " – ", " — ", " | ", " · "} {
+		parts := strings.SplitN(query, separator, 2)
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" &&
+			strings.TrimSpace(parts[1]) != "" {
+			return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
+		}
+	}
+	return "", "", false
+}
+
+func parseAIInfo(text, fallbackTitle string) (songInfo, error) {
+	text = strings.TrimSpace(text)
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	var payload struct {
+		Title  string `json:"title"`
+		Artist string `json:"artist"`
+		Album  string `json:"album"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &payload); err != nil {
+		return songInfo{}, fmt.Errorf("Gemini JSON 无效：%w", err)
+	}
+	payload.Title = fallback(payload.Title, fallbackTitle)
+	payload.Artist = fallback(payload.Artist, "未知艺术家")
+	return songInfo{Title: payload.Title, Artist: payload.Artist, Album: payload.Album}, nil
+}
+
+var decorations = regexp.MustCompile(
+	`(?i)(\[|\(|【)[^\]】)]*(official|video|mv|hd|4k|lyric|subtitles|官方|正式|歌词|字幕|高清|版本)[^\]】)]*(\]|\)|】)`,
+)
+
+func parseVideoTitle(rawTitle, uploader string) (title, artist string) {
+	cleanTitle := strings.TrimSpace(decorations.ReplaceAllString(rawTitle, ""))
+	for _, separator := range []string{" - ", " – ", " — ", " | ", " · "} {
+		parts := strings.SplitN(cleanTitle, separator, 2)
+		if len(parts) == 2 {
+			return strings.TrimSpace(parts[1]), strings.TrimSpace(parts[0])
+		}
+	}
+	cleanUploader := strings.TrimSpace(
+		regexp.MustCompile(`(?i)\s*(official|mv|官方频道)\s*`).ReplaceAllString(uploader, " "),
+	)
+	return cleanTitle, fallback(cleanUploader, "未知艺术家")
+}
+
+func findOutputPath(directory, stdout string) string {
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		candidate := strings.Trim(strings.TrimSpace(lines[index]), `"'`)
+		if candidate == "" {
+			continue
+		}
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(directory, candidate)
+		}
+		candidate, err := filepath.Abs(candidate)
+		if err != nil || !isInside(directory, candidate) {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() &&
+			strings.EqualFold(filepath.Ext(candidate), ".mp3") {
+			return candidate
+		}
+	}
+	matches, _ := filepath.Glob(filepath.Join(directory, "*.mp3"))
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
+}
+
+func isInside(directory, candidate string) bool {
+	root, err := filepath.Abs(directory)
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(root, candidate)
+	return err == nil && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func safeFilename(value string) string {
+	var result strings.Builder
+	for _, char := range strings.TrimSpace(value) {
+		if unicode.IsControl(char) || strings.ContainsRune(`\/:*?"<>|`, char) {
+			continue
+		}
+		if result.Len() >= 100 {
+			break
+		}
+		result.WriteRune(char)
+	}
+	return strings.Trim(result.String(), ". ")
+}
+
+func shortToolError(stderr string, err error) string {
+	detail := strings.TrimSpace(stderr)
+	if detail == "" {
+		detail = err.Error()
+	}
+	return shortError(errors.New(detail))
+}
+
+func shortError(err error) string {
+	text := strings.TrimSpace(err.Error())
+	if len([]rune(text)) <= 500 {
+		return text
+	}
+	return string([]rune(text)[:500]) + "…"
+}
+
+func maskSecret(value string) string {
+	runes := []rune(value)
+	if len(runes) <= 8 {
+		return "••••"
+	}
+	return string(runes[:4]) + "…" + string(runes[len(runes)-4:])
+}
+
+func fallback(value, defaultValue string) string {
+	if strings.TrimSpace(value) == "" || strings.EqualFold(strings.TrimSpace(value), "未知") {
+		return defaultValue
+	}
+	return strings.TrimSpace(value)
+}
+
+func installHint(prefix string) string {
+	return "❌ 未找到 yt-dlp\n\n请通过 yt-dlp 官方方式安装并加入 PATH，" +
+		"或使用 " + prefix + "yt binary <可执行文件路径> 指定位置。"
+}
+
+func helpText(prefix string) string {
+	return "🎵 YouTube 音乐下载器\n\n" +
+		prefix + "yt <关键词>\n" +
+		prefix + "yt <歌名> - <歌手>  手动指定元数据\n" +
+		prefix + "yt update  调用官方自更新\n\n" +
+		"Gemini 元数据（可选）：\n" +
+		prefix + "yt apikey <密钥|clear>\n" +
+		prefix + "yt model <模型名>\n" +
+		prefix + "yt baseurl <地址|clear>\n\n" +
+		"工具配置：\n" +
+		prefix + "yt binary <路径|auto>\n" +
+		prefix + "yt clear\n\n依赖：持续维护的 yt-dlp 与 FFmpeg"
+}

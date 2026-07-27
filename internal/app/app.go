@@ -1,0 +1,331 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/Acacia415/TeleBox-Go/internal/command"
+	"github.com/Acacia415/TeleBox-Go/internal/config"
+	"github.com/Acacia415/TeleBox-Go/internal/dispatch"
+	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
+	"github.com/Acacia415/TeleBox-Go/internal/plugin"
+	"github.com/Acacia415/TeleBox-Go/internal/plugins"
+	coreplugin "github.com/Acacia415/TeleBox-Go/internal/plugins/core"
+	"github.com/Acacia415/TeleBox-Go/internal/ratelimit"
+	"github.com/Acacia415/TeleBox-Go/internal/scheduler"
+	"github.com/Acacia415/TeleBox-Go/internal/service"
+	"github.com/Acacia415/TeleBox-Go/internal/storage"
+	"github.com/Acacia415/TeleBox-Go/internal/telegram"
+	"github.com/Acacia415/TeleBox-Go/internal/toolrunner"
+)
+
+type App struct {
+	config   config.Config
+	logger   *slog.Logger
+	client   telegram.Client
+	router   *command.Router
+	registry *plugin.Registry
+	commands *dispatch.Pool
+	limiter  *ratelimit.Limiter
+	services service.Container
+}
+
+func New(ctx context.Context, cfg config.Config, logger *slog.Logger, client telegram.Client) (*App, error) {
+	if logger == nil {
+		return nil, errors.New("logger is required")
+	}
+	if client == nil {
+		return nil, errors.New("telegram client is required")
+	}
+	router, err := command.NewRouter(cfg.Commands.Prefixes, cfg.Commands.OwnerIDs)
+	if err != nil {
+		return nil, fmt.Errorf("create command router: %w", err)
+	}
+	registry := plugin.NewRegistry(router)
+	store, err := storage.Open(ctx, cfg.Storage.Path)
+	if err != nil {
+		return nil, fmt.Errorf("open storage: %w", err)
+	}
+	tools, err := toolrunner.New(cfg.Tools.MaxConcurrent)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("create tool runner: %w", err)
+	}
+	jobScheduler := scheduler.New(logger)
+	httpClient, err := httpclient.New(httpclient.Config{
+		Timeout:          time.Duration(cfg.HTTP.TimeoutSeconds) * time.Second,
+		MaxConcurrent:    cfg.HTTP.MaxConcurrent,
+		MaxResponseBytes: cfg.HTTP.MaxResponseBytes,
+	})
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("create HTTP client: %w", err)
+	}
+	commandPool, err := dispatch.New(
+		cfg.Commands.MaxConcurrent,
+		cfg.Commands.QueueCapacity,
+		logger,
+	)
+	if err != nil {
+		httpClient.Close()
+		_ = store.Close()
+		return nil, fmt.Errorf("create command pool: %w", err)
+	}
+	services := service.Container{
+		Logger:    logger,
+		Telegram:  client,
+		Storage:   store,
+		Tools:     tools,
+		Scheduler: jobScheduler,
+		AssetsDir: cfg.Storage.AssetsPath,
+		HTTP:      httpClient,
+	}
+	core := coreplugin.New(services, router, registry)
+	if err := registry.Add(core); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("register core plugin: %w", err)
+	}
+	for _, builtin := range plugins.Builtins(services) {
+		if err := registry.Add(builtin); err != nil {
+			httpClient.Close()
+			_ = store.Close()
+			return nil, fmt.Errorf("register builtin plugin: %w", err)
+		}
+	}
+
+	return &App{
+		config:   cfg,
+		logger:   logger,
+		client:   client,
+		router:   router,
+		registry: registry,
+		commands: commandPool,
+		limiter: ratelimit.New(
+			time.Duration(cfg.Commands.PerSenderIntervalMS) * time.Millisecond,
+		),
+		services: services,
+	}, nil
+}
+
+func (a *App) Run(ctx context.Context) (runErr error) {
+	defer a.services.HTTP.Close()
+	defer func() {
+		if err := a.services.Storage.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close storage: %w", err))
+		}
+	}()
+	if err := a.services.Scheduler.Start(ctx); err != nil {
+		return fmt.Errorf("start scheduler: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := a.services.Scheduler.Stop(shutdownCtx); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("stop scheduler: %w", err))
+		}
+	}()
+	a.restoreCoreSettings(ctx)
+	if err := a.registry.Enable(ctx, "core"); err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := a.registry.Shutdown(shutdownCtx); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+	}()
+
+	for _, name := range a.desiredPlugins(ctx) {
+		if name == "core" {
+			continue
+		}
+		if err := a.registry.Enable(ctx, name); err != nil {
+			a.logger.Error("enable plugin failed; continuing",
+				"plugin", name,
+				"error", err,
+			)
+		}
+	}
+
+	if err := a.commands.Start(ctx); err != nil {
+		return fmt.Errorf("start command pool: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := a.commands.Stop(shutdownCtx); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+	}()
+
+	a.logger.Info("TeleBox starting",
+		"plugins", len(a.registry.List()),
+		"prefixes", a.config.Commands.Prefixes,
+		"command_workers", a.config.Commands.MaxConcurrent,
+	)
+	err := a.client.Run(ctx, a.handleMessage)
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
+}
+
+func (a *App) restoreCoreSettings(ctx context.Context) {
+	encoded, err := a.services.Storage.Get(ctx, "core", "command_prefixes")
+	switch {
+	case err == nil:
+		var prefixes []string
+		if decodeErr := json.Unmarshal(encoded, &prefixes); decodeErr != nil {
+			a.logger.Error("decode persisted command prefixes", "error", decodeErr)
+		} else if setErr := a.router.SetPrefixes(prefixes); setErr != nil {
+			a.logger.Error("apply persisted command prefixes", "error", setErr)
+		}
+	case errors.Is(err, storage.ErrNotFound):
+	default:
+		a.logger.Error("load persisted command prefixes", "error", err)
+	}
+}
+
+func (a *App) desiredPlugins(ctx context.Context) []string {
+	desired := make(map[string]bool)
+	for _, name := range a.config.Plugins.Enabled {
+		desired[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	for _, name := range a.config.Plugins.Disabled {
+		desired[strings.ToLower(strings.TrimSpace(name))] = false
+	}
+
+	states, err := a.services.Storage.PluginStates(ctx)
+	if err != nil {
+		a.logger.Error("load persisted plugin states; using config only", "error", err)
+	} else {
+		for _, state := range states {
+			desired[strings.ToLower(strings.TrimSpace(state.Name))] = state.Enabled
+		}
+	}
+
+	registered := make(map[string]struct{})
+	for _, status := range a.registry.List() {
+		registered[status.Metadata.Name] = struct{}{}
+	}
+	var enabled []string
+	for name, isEnabled := range desired {
+		if !isEnabled || name == "core" {
+			continue
+		}
+		if _, exists := registered[name]; !exists {
+			a.logger.Warn("configured plugin is not compiled", "plugin", name)
+			continue
+		}
+		enabled = append(enabled, name)
+	}
+	sort.Strings(enabled)
+	return enabled
+}
+
+func (a *App) Services() service.Container {
+	return a.services
+}
+
+func (a *App) Register(candidate plugin.Plugin) error {
+	return a.registry.Add(candidate)
+}
+
+func (a *App) handleMessage(ctx context.Context, message telegram.Message) error {
+	_, commandLike := a.router.Parse(message)
+	listeners := a.registry.MessageListeners()
+	if !commandLike && len(listeners) == 0 {
+		return nil
+	}
+	if commandLike && !a.router.IsOwner(message) &&
+		!a.limiter.Allow(message.SenderID, time.Now()) {
+		a.logger.Debug("command rate limited",
+			"sender_id", message.SenderID,
+			"chat_id", message.ChatID,
+		)
+		return nil
+	}
+	if err := a.commands.Submit(func(jobCtx context.Context) {
+		a.dispatchListeners(jobCtx, message, listeners)
+		if commandLike {
+			a.dispatchMessage(jobCtx, message)
+		}
+	}); err != nil {
+		a.logger.Warn("command queue rejected message",
+			"sender_id", message.SenderID,
+			"chat_id", message.ChatID,
+			"error", err,
+		)
+	}
+	return nil
+}
+
+func (a *App) dispatchListeners(
+	ctx context.Context,
+	message telegram.Message,
+	listeners []plugin.Listener,
+) {
+	for _, listener := range listeners {
+		if err := listener.Handler.OnMessage(ctx, message); err != nil {
+			a.logger.Error(
+				"plugin message listener failed",
+				"plugin", listener.Plugin,
+				"sender_id", message.SenderID,
+				"chat_id", message.ChatID,
+				"error", err,
+			)
+		}
+	}
+}
+
+func (a *App) dispatchMessage(ctx context.Context, message telegram.Message) {
+	result, err := a.router.Dispatch(ctx, message)
+	switch {
+	case err == nil:
+		return
+	case errors.Is(err, command.ErrPermissionDenied):
+		a.logger.Warn("command denied",
+			"plugin", result.Plugin,
+			"command", result.Command,
+			"sender_id", message.SenderID,
+			"chat_id", message.ChatID,
+		)
+		if sendErr := a.respondCommandError(ctx, message, "⛔ 无权使用此命令"); sendErr != nil {
+			a.logger.Error("send permission denial", "error", sendErr)
+		}
+		return
+	default:
+		a.logger.Error("command failed",
+			"plugin", result.Plugin,
+			"command", result.Command,
+			"sender_id", message.SenderID,
+			"chat_id", message.ChatID,
+			"error", err,
+		)
+		if sendErr := a.respondCommandError(ctx, message, "❌ 命令执行失败"); sendErr != nil {
+			a.logger.Error("send command failure", "error", sendErr)
+		}
+		// A single plugin error must not stop the MTProto update loop.
+		return
+	}
+}
+
+func (a *App) respondCommandError(
+	ctx context.Context,
+	message telegram.Message,
+	text string,
+) error {
+	if message.Outgoing {
+		_, err := a.client.EditText(ctx, message.ChatID, message.ID, text)
+		return err
+	}
+	_, err := a.client.ReplyText(ctx, message.ChatID, message.ID, text)
+	return err
+}
