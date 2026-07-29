@@ -48,7 +48,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "telegram-backup",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "备份私聊消息元数据以及群组、频道链接并导出安全 ZIP",
 	}
 }
@@ -71,6 +71,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"tb delete <ID>",
 			"tb clear confirm",
 		},
+		HelpHTML:  telegramBackupGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -817,3 +818,31 @@ func helpText(prefix string) string {
 		prefix + "tb clear confirm\n\n" +
 		"消息备份保存文字与媒体元数据，不会重复下载所有媒体文件。"
 }
+
+const telegramBackupGuideHTML = `<b>📦 Telegram 对话备份</b>
+
+<b>消息备份</b>
+<code>{{prefix}}tb saved</code> 备份收藏夹
+<code>{{prefix}}tb private</code> 备份所有私聊
+<code>{{prefix}}tb chat [@用户名]</code> 备份指定私聊；不填目标时使用当前私聊
+<code>{{prefix}}tb all</code> 执行消息与链接备份
+
+<b>群组和频道</b>
+<code>{{prefix}}tb groups</code> 保存群组信息和可用链接
+<code>{{prefix}}tb channels</code> 保存频道信息和可用链接
+<code>{{prefix}}tb links</code> 保存群组及频道链接
+<code>{{prefix}}tb showgroups</code> 显示已保存的群组链接
+<code>{{prefix}}tb join</code> 加入已保存的频道
+
+<b>备份管理</b>
+<code>{{prefix}}tb list</code>
+<code>{{prefix}}tb export &lt;ID&gt;</code>
+<code>{{prefix}}tb exportall</code>
+<code>{{prefix}}tb delete &lt;ID&gt;</code>
+<code>{{prefix}}tb clear confirm</code> 清空插件内全部备份记录
+
+<b>恢复</b>
+回复 JSON 或 ZIP 文件后发送 <code>{{prefix}}tb restore</code>
+回复包含多份备份的 ZIP 后发送 <code>{{prefix}}tb restoreall</code>
+
+私聊和收藏夹备份保存文字以及媒体元数据；群组、频道主要保存对话资料和链接，不会把所有媒体重复下载到本机。`

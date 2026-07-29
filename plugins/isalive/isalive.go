@@ -27,7 +27,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "isalive",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "查询 Telegram 用户最后上线状态",
 	}
 }
@@ -38,6 +38,7 @@ func (p *Plugin) Commands() []command.Definition {
 			Name:        "isalive",
 			Description: "查询用户名或 UID 的最后上线状态",
 			Usage:       []string{"isalive <@用户名|用户ID>"},
+			HelpHTML:    isAliveGuideHTML,
 			OwnerOnly:   true,
 			Handler:     p.handle,
 		},
@@ -114,6 +115,12 @@ func formatStatus(user telegram.User, now time.Time) string {
 		deleted,
 	)
 }
+
+const isAliveGuideHTML = `<b>最后上线状态</b>
+
+<code>{{prefix}}isalive &lt;@用户名|用户ID&gt;</code>
+
+返回 Telegram 提供的在线状态或最后上线时间。使用用户 ID 查询时，该用户需要已存在于当前账号的实体缓存中，例如曾经私聊、同群或出现在对话列表中；否则 Telegram 可能无法解析该 ID。`
 
 func presenceText(user telegram.User, now time.Time) (string, string) {
 	switch user.Presence {

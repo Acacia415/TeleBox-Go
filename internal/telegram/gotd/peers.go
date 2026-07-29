@@ -258,6 +258,14 @@ func portableUser(raw *tg.User) teleboxtelegram.User {
 	if photo, ok := raw.Photo.(*tg.UserProfilePhoto); ok {
 		result.PhotoDC = photo.DCID
 	}
+	if status, ok := raw.GetEmojiStatus(); ok {
+		switch value := status.(type) {
+		case *tg.EmojiStatus:
+			result.EmojiStatus = value.DocumentID
+		case *tg.EmojiStatusCollectible:
+			result.EmojiStatus = value.DocumentID
+		}
+	}
 	status, ok := raw.GetStatus()
 	if !ok {
 		return result

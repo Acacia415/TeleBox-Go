@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"os"
@@ -60,7 +61,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "yt-dlp",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "使用 yt-dlp 搜索并下载 YouTube 音乐",
 	}
 }
@@ -71,6 +72,7 @@ func (p *Plugin) Commands() []command.Definition {
 		Description: "搜索并下载 YouTube 音乐",
 		Usage: []string{
 			"yt <关键词>",
+			"yt <歌名>-<歌手>",
 			"yt <歌名> - <歌手>",
 			"yt update",
 			"yt apikey <密钥|clear>",
@@ -84,6 +86,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"yt doctor",
 			"yt clear",
 		},
+		HelpHTML:  ytGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -103,9 +106,11 @@ func (p *Plugin) Stop(context.Context) error { return nil }
 
 func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 	if len(request.Args) == 0 {
-		return p.respond(ctx, request, helpText(request.Prefix))
+		return p.respondHTML(ctx, request, ytHelpHTML(request.Prefix))
 	}
 	switch strings.ToLower(request.Args[0]) {
+	case "help", "h":
+		return p.respondHTML(ctx, request, ytHelpHTML(request.Prefix))
 	case "update":
 		return p.update(ctx, request)
 	case "apikey":
@@ -318,7 +323,7 @@ func (p *Plugin) identify(
 	body, err := json.Marshal(map[string]any{
 		"systemInstruction": map[string]any{
 			"parts": []map[string]string{{
-				"text": "你是音乐信息专家。只返回 JSON，字段为 title、artist、album；未知填“未知”。",
+				"text": "根据输入校正歌曲信息。只返回 JSON，字段为 title、artist、album；未知填“未知”。",
 			}},
 		},
 		"contents": []map[string]any{{
@@ -574,11 +579,39 @@ func (p *Plugin) respond(ctx context.Context, request command.Request, text stri
 	return err
 }
 
+func (p *Plugin) respondHTML(ctx context.Context, request command.Request, text string) error {
+	if request.Message.Outgoing {
+		_, err := telegram.EditHTML(
+			ctx,
+			p.services.Telegram,
+			request.Message.ChatID,
+			request.Message.ID,
+			text,
+		)
+		return err
+	}
+	_, err := telegram.ReplyHTML(
+		ctx,
+		p.services.Telegram,
+		request.Message.ChatID,
+		request.Message.ID,
+		text,
+	)
+	return err
+}
+
 func parseManual(query string) (title, artist string, ok bool) {
 	for _, separator := range []string{" - ", " – ", " — ", " | ", " · "} {
 		parts := strings.SplitN(query, separator, 2)
 		if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" &&
 			strings.TrimSpace(parts[1]) != "" {
+			return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
+		}
+	}
+	if strings.Count(query, "-") == 1 &&
+		!strings.ContainsFunc(query, unicode.IsSpace) {
+		parts := strings.SplitN(query, "-", 2)
+		if strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != "" {
 			return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
 		}
 	}
@@ -707,21 +740,63 @@ func installHint(prefix string) string {
 		"或使用 " + prefix + "yt binary <可执行文件路径> 指定位置。"
 }
 
-func helpText(prefix string) string {
-	return "🎵 YouTube 音乐下载器\n\n" +
-		prefix + "yt <关键词>\n" +
-		prefix + "yt <歌名> - <歌手>  手动指定元数据\n" +
-		prefix + "yt update  调用官方自更新\n\n" +
-		"Gemini 元数据（可选）：\n" +
-		prefix + "yt apikey <密钥|clear>\n" +
-		prefix + "yt model <模型名>\n" +
-		prefix + "yt baseurl <地址|clear>\n\n" +
-		"工具配置：\n" +
-		prefix + "yt setup  自动安装 yt-dlp\n" +
-		prefix + "yt doctor  检查 yt-dlp、FFmpeg、Deno 与登录配置\n" +
-		prefix + "yt proxy <地址|clear>\n" +
-		prefix + "yt cookies <文件路径|clear>\n" +
-		prefix + "yt runtime <Deno路径|auto|none>\n" +
-		prefix + "yt binary <路径|auto>\n" +
-		prefix + "yt clear\n\n依赖：持续维护的 yt-dlp 与 FFmpeg"
+func ytHelpHTML(prefix string) string {
+	return "<b>🔧 YT · YouTube 音乐下载器</b>\n\n" +
+		strings.ReplaceAll(ytGuideHTML, "{{prefix}}", html.EscapeString(prefix))
 }
+
+const ytGuideHTML = `<b>功能</b>
+• 按歌名搜索并下载最佳音质
+• 使用 Gemini 补全歌名、歌手、专辑和封面
+• 支持手动指定歌名与歌手
+• 自动嵌入封面和歌曲信息
+• 更新 yt-dlp 下载核心
+
+<b>搜索与下载</b>
+• <code>{{prefix}}yt 稻香</code>
+• <code>{{prefix}}yt 晴天-周杰伦</code>
+• <code>{{prefix}}yt 晴天 - 周杰伦</code>
+
+配置 API Key 后会先用 Gemini 整理歌曲信息；没有 API Key 时直接使用 yt-dlp 搜索。
+
+<b>Gemini 配置</b>
+• <code>{{prefix}}yt apikey &lt;API密钥&gt;</code>  保存密钥
+• <code>{{prefix}}yt apikey</code>  查看是否已配置
+• <code>{{prefix}}yt apikey clear</code>  清除密钥
+• <code>{{prefix}}yt model &lt;模型名&gt;</code>  设置模型
+• <code>{{prefix}}yt baseurl &lt;反代地址&gt;</code>  设置 Gemini API 地址
+• <code>{{prefix}}yt baseurl</code>  查看当前地址
+• <code>{{prefix}}yt baseurl clear</code>  恢复官方地址
+
+<b>Cloudflare Workers 反代</b>
+Gemini 官方 API 无法直连时，可部署下面的 Worker，再把 workers.dev 地址交给 <code>{{prefix}}yt baseurl</code>。
+
+<pre>export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    url.hostname = 'generativelanguage.googleapis.com';
+    return fetch(new Request(url.toString(), {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+    }));
+  }
+};</pre>
+
+示例：<code>{{prefix}}yt baseurl https://你的项目.workers.dev</code>
+
+该反代只处理 Gemini 元数据接口。YouTube 下载受地区、服务器 IP 或登录验证限制时，请配置下面的代理与 Cookies。
+
+<b>YouTube 下载配置</b>
+• <code>{{prefix}}yt setup</code>  安装或重装 yt-dlp
+• <code>{{prefix}}yt update</code>  更新 yt-dlp
+• <code>{{prefix}}yt doctor</code>  检查 yt-dlp、FFmpeg、Deno、代理和 Cookies
+• <code>{{prefix}}yt proxy &lt;地址&gt;</code>  设置 HTTP(S) 或 SOCKS 代理
+• <code>{{prefix}}yt proxy clear</code>  清除代理
+• <code>{{prefix}}yt cookies &lt;文件路径&gt;</code>  设置 Netscape Cookies 文件
+• <code>{{prefix}}yt cookies clear</code>  清除 Cookies
+• <code>{{prefix}}yt runtime &lt;Deno路径|auto|none&gt;</code>  设置 JS 运行时
+• <code>{{prefix}}yt binary &lt;路径|auto&gt;</code>  指定 yt-dlp
+• <code>{{prefix}}yt clear</code>  清理临时文件
+
+出现 <code>Sign in to confirm you’re not a bot</code> 时需要 Cookies；代理不能替代 Cookies。`

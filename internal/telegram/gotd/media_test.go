@@ -94,8 +94,21 @@ func TestStableMessageIncludesPortableMediaAndReply(t *testing.T) {
 	}
 	reply := &tg.MessageReplyHeader{}
 	reply.SetReplyToMsgID(9)
+	reply.SetQuoteText("quoted")
+	reply.SetQuoteEntities([]tg.MessageEntityClass{
+		&tg.MessageEntityItalic{Offset: 0, Length: 6},
+	})
 	raw.SetReplyTo(reply)
 	raw.SetGroupedID(99)
+	raw.Entities = []tg.MessageEntityClass{
+		&tg.MessageEntityBold{Offset: 0, Length: 7},
+		&tg.MessageEntityTextURL{
+			Offset: 0,
+			Length: 7,
+			URL:    "https://example.com",
+		},
+		&tg.MessageEntityCustomEmoji{Offset: 7, Length: 2, DocumentID: 123},
+	}
 	documentMedia := &tg.MessageMediaDocument{}
 	documentMedia.SetDocument(&tg.Document{
 		ID:       12,
@@ -114,6 +127,17 @@ func TestStableMessageIncludesPortableMediaAndReply(t *testing.T) {
 	if got.Media == nil || got.Media.Kind != teleboxtelegram.MediaVoice ||
 		got.Media.Duration != 3*time.Second {
 		t.Fatalf("stableMessage().Media = %+v", got.Media)
+	}
+	if got.ReplyQuote != "quoted" || len(got.ReplyEntities) != 1 ||
+		got.ReplyEntities[0].Type != "italic" {
+		t.Fatalf("stableMessage().ReplyEntities = %+v", got.ReplyEntities)
+	}
+	if len(got.Entities) != 3 ||
+		got.Entities[0].Type != "bold" ||
+		got.Entities[1].Type != "text_link" ||
+		got.Entities[1].URL != "https://example.com" ||
+		got.Entities[2].DocumentID != 123 {
+		t.Fatalf("stableMessage().Entities = %+v", got.Entities)
 	}
 }
 

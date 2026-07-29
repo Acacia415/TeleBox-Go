@@ -37,7 +37,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "ai",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "调用 Gemini、OpenAI、Claude、DeepSeek、Grok 与第三方模型",
 	}
 }
@@ -68,6 +68,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"ai telegraph <on|off|limit <字符数>|list|del <ID|all>>",
 			"ai config default",
 		},
+		HelpHTML:  aiGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -738,3 +739,51 @@ func helpText(prefix string) string {
 		"• " + prefix + "ai context <on|off|show|clear>\n" +
 		"• " + prefix + "ai prompt <add|del|list|set|show>"
 }
+
+const aiGuideHTML = `<b>模型服务</b>
+
+支持 Gemini、OpenAI、Claude、DeepSeek、Grok 和兼容接口。文本对话可直接输入问题，也可回复文本、图片、音频或文档。
+
+<b>对话与内容</b>
+<code>{{prefix}}ai &lt;问题&gt;</code> 对话或分析回复内容
+<code>{{prefix}}ai search &lt;问题&gt;</code> 使用支持联网搜索的模型
+<code>{{prefix}}ai image &lt;提示词&gt;</code> 生成图片
+<code>{{prefix}}ai tts &lt;文本&gt;</code> 文本转语音
+<code>{{prefix}}ai audio &lt;问题&gt;</code> 将回答转为语音
+<code>{{prefix}}ai searchaudio &lt;问题&gt;</code> 搜索后将回答转为语音
+
+<b>服务商</b>
+<code>{{prefix}}ai apikey &lt;服务商&gt; &lt;密钥|clear&gt;</code>
+<code>{{prefix}}ai select &lt;服务商&gt;</code>
+<code>{{prefix}}ai baseurl &lt;服务商&gt; &lt;地址|clear&gt;</code>
+<code>{{prefix}}ai thirdparty compat &lt;openai|gemini|claude|deepseek|grok&gt;</code>
+服务商名称：<code>gemini openai claude deepseek grok thirdparty</code>
+
+<b>模型</b>
+<code>{{prefix}}ai model list</code> 查看当前配置和可用模型
+<code>{{prefix}}ai model set &lt;chat|search|image|tts&gt; &lt;模型名&gt;</code>
+<code>{{prefix}}ai model auto</code> 按当前服务商重新分配模型
+<code>{{prefix}}ai chatmodel|searchmodel|imagemodel|ttsmodel &lt;模型名&gt;</code>
+<code>{{prefix}}ai ttsvoice list</code> 查看当前协议支持的音色
+<code>{{prefix}}ai ttsvoice [音色]</code> 查看或设置音色
+<code>{{prefix}}ai maxtokens [数量]</code>；<code>0</code> 表示不另设限制
+
+<b>提示词与上下文</b>
+<code>{{prefix}}ai prompt list</code>
+<code>{{prefix}}ai prompt add &lt;名称&gt; &lt;内容&gt;</code>
+<code>{{prefix}}ai prompt del &lt;名称&gt;</code>
+<code>{{prefix}}ai prompt set &lt;chat|search|tts&gt; &lt;名称&gt;</code>
+<code>{{prefix}}ai prompt show &lt;名称&gt;</code>
+<code>{{prefix}}ai context &lt;on|off|show|clear&gt;</code>
+
+<b>输出与管理</b>
+<code>{{prefix}}ai collapse &lt;on|off&gt;</code> 折叠长引用
+<code>{{prefix}}ai telegraph &lt;on|off&gt;</code>
+<code>{{prefix}}ai telegraph limit &lt;字符数&gt;</code>
+<code>{{prefix}}ai telegraph list</code>
+<code>{{prefix}}ai telegraph del &lt;ID|all&gt;</code>
+<code>{{prefix}}ai settings</code> 查看当前配置
+<code>{{prefix}}ai status</code> 检查各服务商状态
+<code>{{prefix}}ai config default</code> 重置插件配置
+
+API Key 会隐藏显示并保存在本地数据库中。第三方接口需要同时设置 Base URL 和兼容协议。`

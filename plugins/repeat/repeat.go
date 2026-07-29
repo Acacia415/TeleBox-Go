@@ -27,7 +27,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "re",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "复读回复的消息",
 	}
 }
@@ -37,6 +37,7 @@ func (p *Plugin) Commands() []command.Definition {
 		Name:        "re",
 		Description: "复读回复消息，可指定消息数和次数",
 		Usage:       []string{"re [消息数] [复读次数]（回复消息）"},
+		HelpHTML:    repeatGuideHTML,
 		OwnerOnly:   true,
 		Handler:     p.handle,
 	}}
@@ -154,3 +155,12 @@ func messageRange(replyToID, count int) []int {
 	}
 	return result
 }
+
+const repeatGuideHTML = `<b>复读消息</b>
+
+回复一条消息后发送：
+<code>{{prefix}}re [消息数] [复读次数]</code>
+
+<code>消息数</code> 表示从被回复消息开始连续处理多少条消息；<code>复读次数</code> 表示整组发送多少遍。两项不填时均为 1。
+
+插件优先转发原消息；对话禁止转发时会改为复制可复制的文字或媒体内容。`

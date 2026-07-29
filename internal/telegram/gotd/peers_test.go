@@ -22,8 +22,10 @@ func TestPortableUser(t *testing.T) {
 		Photo:     &tg.UserProfilePhoto{DCID: 5},
 	}
 	raw.SetStatus(&tg.UserStatusOffline{WasOnline: 100})
+	raw.SetEmojiStatus(&tg.EmojiStatus{DocumentID: 99})
 	got := portableUser(raw)
 	if got.ID != 42 || got.Username != "telebox" || got.PhotoDC != 5 ||
+		got.EmojiStatus != 99 ||
 		got.Presence != teleboxtelegram.PresenceOffline ||
 		!got.LastSeen.Equal(time.Unix(100, 0)) {
 		t.Fatalf("portableUser() = %+v", got)

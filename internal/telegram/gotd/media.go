@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/gotd/td/constant"
 	gotdmessage "github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/telegram/message/unpack"
+	gotdpeers "github.com/gotd/td/telegram/peers"
 	"github.com/gotd/td/telegram/query"
 	"github.com/gotd/td/tg"
 
@@ -243,13 +245,84 @@ func (c *Client) DownloadMedia(
 	return *metadata, nil
 }
 
+func (c *Client) DownloadMediaPreview(
+	ctx context.Context,
+	chatID int64,
+	messageID int,
+	output io.Writer,
+) (teleboxtelegram.Media, error) {
+	if output == nil {
+		return teleboxtelegram.Media{}, errors.New("download output is required")
+	}
+	rawMessages, err := c.getRawMessages(ctx, chatID, []int{messageID})
+	if err != nil {
+		return teleboxtelegram.Media{}, err
+	}
+	if len(rawMessages) == 0 {
+		return teleboxtelegram.Media{}, teleboxtelegram.ErrMessageNotFound
+	}
+	raw, ok := rawMessages[0].(*tg.Message)
+	if !ok {
+		return teleboxtelegram.Media{}, teleboxtelegram.ErrMessageNotFound
+	}
+	mediaClass, ok := raw.GetMedia()
+	if !ok {
+		return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+	}
+	metadata := mediaMetadata(mediaClass)
+	if metadata == nil {
+		return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+	}
+
+	var location tg.InputFileLocationClass
+	switch media := mediaClass.(type) {
+	case *tg.MessageMediaPhoto:
+		class, exists := media.GetPhoto()
+		if !exists {
+			return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+		}
+		photo, exists := class.AsNotEmpty()
+		if !exists {
+			return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+		}
+		thumbType, _, _, _ := largestPhotoSize(photo.Sizes)
+		if thumbType == "" {
+			return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+		}
+		location = photo.AsInputPhotoFileLocation(thumbType)
+	case *tg.MessageMediaDocument:
+		class, exists := media.GetDocument()
+		if !exists {
+			return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+		}
+		document, exists := class.AsNotEmpty()
+		if !exists {
+			return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+		}
+		thumbType, _, _, _ := largestPhotoSize(document.Thumbs)
+		if thumbType != "" {
+			location = document.AsInputDocumentFileLocation(thumbType)
+		} else if metadata.Kind == teleboxtelegram.MediaSticker {
+			location = document.AsInputDocumentFileLocation("")
+		} else {
+			return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+		}
+	default:
+		return teleboxtelegram.Media{}, teleboxtelegram.ErrMediaNotFound
+	}
+	if _, err := c.raw.Download(location).Stream(ctx, output); err != nil {
+		return teleboxtelegram.Media{}, fmt.Errorf("download media preview: %w", err)
+	}
+	return *metadata, nil
+}
+
 func (c *Client) DownloadProfilePhoto(
 	ctx context.Context,
-	userID int64,
+	peerID int64,
 	output io.Writer,
 ) error {
-	if userID <= 0 {
-		return errors.New("profile photo user ID must be greater than zero")
+	if peerID == 0 {
+		return errors.New("profile photo peer ID is required")
 	}
 	if output == nil {
 		return errors.New("profile photo output is required")
@@ -260,11 +333,24 @@ func (c *Client) DownloadProfilePhoto(
 	if !ready {
 		return teleboxtelegram.ErrTransportUnavailable
 	}
-	user, err := c.peers.ResolveUserID(ctx, userID)
+	resolved, err := c.peers.ResolveTDLibID(ctx, constant.TDLibPeerID(peerID))
 	if err != nil {
-		return fmt.Errorf("resolve profile photo user: %w", err)
+		return fmt.Errorf("resolve profile photo peer: %w", err)
 	}
-	photo, ok, err := user.Photo(ctx)
+	var (
+		photo *tg.Photo
+		ok    bool
+	)
+	switch value := resolved.(type) {
+	case gotdpeers.User:
+		photo, ok, err = value.Photo(ctx)
+	case gotdpeers.Chat:
+		photo, ok, err = value.Photo(ctx)
+	case gotdpeers.Channel:
+		photo, ok, err = value.Photo(ctx)
+	default:
+		return teleboxtelegram.ErrMediaNotFound
+	}
 	if err != nil {
 		return fmt.Errorf("get profile photo: %w", err)
 	}
@@ -320,10 +406,14 @@ func stableMessage(raw *tg.Message, chatID, selfID int64) teleboxtelegram.Messag
 
 	replyToID := 0
 	replyQuote := ""
+	var replyEntities []teleboxtelegram.MessageEntity
 	if reply, exists := raw.GetReplyTo(); exists {
 		if header, ok := reply.(*tg.MessageReplyHeader); ok {
 			replyToID, _ = header.GetReplyToMsgID()
 			replyQuote, _ = header.GetQuoteText()
+			if entities, exists := header.GetQuoteEntities(); exists {
+				replyEntities = portableMessageEntities(entities)
+			}
 		}
 	}
 	forwardSenderID := int64(0)
@@ -353,7 +443,9 @@ func stableMessage(raw *tg.Message, chatID, selfID int64) teleboxtelegram.Messag
 		ForwardName:     forwardName,
 		ReplyToID:       replyToID,
 		ReplyQuote:      replyQuote,
+		ReplyEntities:   replyEntities,
 		Text:            raw.Message,
+		Entities:        portableMessageEntities(raw.Entities),
 		Outgoing:        outgoing,
 		Date:            time.Unix(int64(raw.Date), 0),
 		GroupedID:       groupedID,
@@ -361,6 +453,59 @@ func stableMessage(raw *tg.Message, chatID, selfID int64) teleboxtelegram.Messag
 		Sticker:         stickerReference(raw),
 		CustomEmojiIDs:  customEmojiIDs,
 	}
+}
+
+func portableMessageEntities(
+	values []tg.MessageEntityClass,
+) []teleboxtelegram.MessageEntity {
+	result := make([]teleboxtelegram.MessageEntity, 0, len(values))
+	for _, value := range values {
+		entity := teleboxtelegram.MessageEntity{
+			Offset: value.GetOffset(),
+			Length: value.GetLength(),
+		}
+		switch typed := value.(type) {
+		case *tg.MessageEntityBold:
+			entity.Type = "bold"
+		case *tg.MessageEntityItalic:
+			entity.Type = "italic"
+		case *tg.MessageEntityUnderline:
+			entity.Type = "underline"
+		case *tg.MessageEntityStrike:
+			entity.Type = "strikethrough"
+		case *tg.MessageEntityCode:
+			entity.Type = "code"
+		case *tg.MessageEntityPre:
+			entity.Type = "pre"
+		case *tg.MessageEntityCustomEmoji:
+			entity.Type = "custom_emoji"
+			entity.DocumentID = typed.DocumentID
+		case *tg.MessageEntityURL:
+			entity.Type = "url"
+		case *tg.MessageEntityTextURL:
+			entity.Type = "text_link"
+			entity.URL = typed.URL
+		case *tg.MessageEntityMention:
+			entity.Type = "mention"
+		case *tg.MessageEntityMentionName:
+			entity.Type = "text_mention"
+			entity.UserID = typed.UserID
+		case *tg.MessageEntityHashtag:
+			entity.Type = "hashtag"
+		case *tg.MessageEntityCashtag:
+			entity.Type = "cashtag"
+		case *tg.MessageEntityBotCommand:
+			entity.Type = "bot_command"
+		case *tg.MessageEntityEmail:
+			entity.Type = "email"
+		case *tg.MessageEntityPhone:
+			entity.Type = "phone_number"
+		case *tg.MessageEntitySpoiler:
+			entity.Type = "spoiler"
+		}
+		result = append(result, entity)
+	}
+	return result
 }
 
 func stickerReference(raw *tg.Message) *teleboxtelegram.Sticker {

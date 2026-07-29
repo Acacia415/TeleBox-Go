@@ -433,6 +433,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment="HOME=${HOME}"
+Environment="USER=${INSTALL_USER}"
+Environment="LOGNAME=${INSTALL_USER}"
+Environment="XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-${HOME}/.config}"
+Environment="XDG_DATA_HOME=${XDG_DATA_HOME:-${HOME}/.local/share}"
 EnvironmentFile=${ENV_FILE}
 ExecStart=${PREFIX}/bin/telebox -config ${CONFIG_DIR}/config.json
 WorkingDirectory=${DATA_DIR}

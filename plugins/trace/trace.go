@@ -53,7 +53,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "trace",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "按用户或关键词自动发送 Telegram reaction",
 	}
 }
@@ -72,6 +72,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"trace log <true|false>",
 			"trace big <true|false>",
 		},
+		HelpHTML:  traceGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -592,3 +593,22 @@ func helpText(prefix string) string {
 		prefix + "trace log <true|false>\n" +
 		prefix + "trace big <true|false>"
 }
+
+const traceGuideHTML = `<b>🎯 Reaction 自动回应</b>
+
+<b>用户追踪</b>
+回复目标用户的消息后发送 <code>{{prefix}}trace 👍👎🥰</code>，为该用户设置 reaction
+回复目标用户的消息后发送 <code>{{prefix}}trace</code>，取消该用户的追踪
+
+<b>关键词追踪</b>
+<code>{{prefix}}trace kw add &lt;关键词&gt; 👍👎🥰</code>
+<code>{{prefix}}trace kw del &lt;关键词&gt;</code>
+
+<b>管理</b>
+<code>{{prefix}}trace status</code> 查看用户、关键词和配置
+<code>{{prefix}}trace clean</code> 清除追踪规则
+<code>{{prefix}}trace reset</code> 重置全部数据
+<code>{{prefix}}trace log &lt;true|false&gt;</code> 是否保留操作回执
+<code>{{prefix}}trace big &lt;true|false&gt;</code> 是否发送大号 reaction 动画
+
+标准 reaction 不要求 Premium；自定义表情 reaction 需要当前账号具备相应权限。`

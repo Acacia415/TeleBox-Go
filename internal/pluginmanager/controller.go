@@ -214,7 +214,21 @@ func (c *Controller) UpdateAll(
 	if err != nil {
 		updateErrors = append(updateErrors, err)
 	}
-	for _, item := range installed {
+	catalog, catalogErr := c.market.Catalog(ctx)
+	if catalogErr != nil {
+		updateErrors = append(updateErrors, catalogErr)
+		return nil, errors.Join(updateErrors...)
+	}
+	updatable, skipped := catalogInstalledPlugins(installed, catalog)
+	for _, name := range skipped {
+		if c.services.Logger != nil {
+			c.services.Logger.Info(
+				"skip plugin update; package is not in the catalog",
+				"plugin", name,
+			)
+		}
+	}
+	for _, item := range updatable {
 		result, updateErr := c.install(ctx, item.Manifest.Name, "latest", false)
 		if updateErr != nil {
 			updateErrors = append(updateErrors, fmt.Errorf(
@@ -227,6 +241,21 @@ func (c *Controller) UpdateAll(
 		results = append(results, result)
 	}
 	return results, errors.Join(updateErrors...)
+}
+
+func catalogInstalledPlugins(
+	installed []pluginmarket.Installed,
+	catalog pluginapi.Catalog,
+) (updatable []pluginmarket.Installed, skipped []string) {
+	updatable = make([]pluginmarket.Installed, 0, len(installed))
+	for _, item := range installed {
+		if _, exists := catalog.Find(item.Manifest.Name); !exists {
+			skipped = append(skipped, item.Manifest.Name)
+			continue
+		}
+		updatable = append(updatable, item)
+	}
+	return updatable, skipped
 }
 
 func (c *Controller) Remove(ctx context.Context, name string) error {

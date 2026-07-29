@@ -58,6 +58,7 @@ type User struct {
 	FirstName   string
 	LastName    string
 	Username    string
+	EmojiStatus int64
 	Phone       string
 	Bio         string
 	CommonChats int
@@ -175,6 +176,15 @@ type BotMediaRequest struct {
 	Timeout time.Duration
 }
 
+type MessageEntity struct {
+	Type       string
+	Offset     int
+	Length     int
+	URL        string
+	UserID     int64
+	DocumentID int64
+}
+
 type Message struct {
 	ID              int
 	ChatID          int64
@@ -183,7 +193,9 @@ type Message struct {
 	ForwardName     string
 	ReplyToID       int
 	ReplyQuote      string
+	ReplyEntities   []MessageEntity
 	Text            string
+	Entities        []MessageEntity
 	Outgoing        bool
 	Date            time.Time
 	GroupedID       int64
@@ -231,6 +243,7 @@ type Client interface {
 	GetMessages(context.Context, int64, []int) ([]Message, error)
 	GetHistory(context.Context, HistoryQuery) ([]Message, error)
 	DownloadMedia(context.Context, int64, int, io.Writer) (Media, error)
+	DownloadMediaPreview(context.Context, int64, int, io.Writer) (Media, error)
 	DownloadProfilePhoto(context.Context, int64, io.Writer) error
 	ResolveUser(context.Context, string) (User, error)
 	ResolveChat(context.Context, int64) (Chat, error)

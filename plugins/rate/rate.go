@@ -60,7 +60,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "rate",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "法币与主流加密货币汇率查询",
 	}
 }
@@ -71,6 +71,7 @@ func (p *Plugin) Commands() []command.Definition {
 			Name:        "rate",
 			Description: "查询两种货币的汇率与数量换算",
 			Usage:       []string{"rate <基准币> [目标币] [数量]"},
+			HelpHTML:    helpText("{{prefix}}"),
 			OwnerOnly:   true,
 			Handler:     p.handle,
 		},

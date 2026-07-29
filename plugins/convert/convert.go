@@ -52,7 +52,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "convert",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "将回复的视频或媒体文件转换为 MP3",
 	}
 }
@@ -68,6 +68,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"convert model <模型名>",
 			"convert clear",
 		},
+		HelpHTML:  convertGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -623,3 +624,25 @@ func helpText(prefix string) string {
 		prefix + "convert model <模型名>\n" +
 		prefix + "convert clear\n\n系统依赖：ffmpeg（建议同时安装 ffprobe）"
 }
+
+const convertGuideHTML = `<b>🎬 视频转音频</b>
+
+回复视频或媒体文件后使用。插件提取音轨并输出 MP3。
+
+<b>普通转换</b>
+<code>{{prefix}}convert [输出文件名]</code>
+不填写文件名时沿用原文件名。
+
+<b>元数据模式</b>
+<code>{{prefix}}convert u &lt;歌曲名&gt;</code>
+配置 Gemini API Key 后，可查询歌曲名、歌手、专辑和封面并写入 MP3 元数据。
+
+<b>配置</b>
+<code>{{prefix}}convert apikey &lt;Gemini API Key&gt;</code>
+<code>{{prefix}}convert apikey</code> 查看当前 Key 的隐藏摘要
+<code>{{prefix}}convert apikey clear</code>
+<code>{{prefix}}convert model &lt;模型名&gt;</code>
+<code>{{prefix}}convert clear</code> 清理临时文件
+
+<b>系统依赖</b>
+必须安装 <code>ffmpeg</code>；建议同时安装 <code>ffprobe</code>。`

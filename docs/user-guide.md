@@ -508,6 +508,10 @@ systemctl restart telebox.service
 正式发布包中包含 `telebox-migrate`。它只用于首次迁移原版 TeleBox 的
 `.tar.gz` 全量备份，不用于恢复 `-bf` 创建的 TeleBox-Go 备份。
 
+一键安装不会自动寻找或上传其他电脑上的原版备份。需要先把自己的
+`.tar.gz` 备份上传到目标机器，再明确执行下面的 `inspect` 和 `convert`；
+没有提供备份文件时，新安装不会恢复任何用户的旧数据。
+
 建议在独立空目录中转换并测试，迁移器会拒绝覆盖已有配置、会话或资源目录：
 
 ```bash
@@ -561,7 +565,10 @@ cd ~/telebox-migration
 ```
 
 旧 alias、sudo、sure 和当前 Go 插件支持的数据会从迁移后的活动资产中读取，
-并在插件首次启动时写入 Go 版存储。除此之外，原备份中
+并在插件首次启动时写入 Go 版存储。插件也会检查完整保留目录，因此先迁移、
+以后再安装对应 Go 插件时仍可导入旧数据。比如 `cezi_config.db` 会恢复测字
+配置，`speedlink/secret.key` 与 `servers.db` 会恢复原版服务器列表和认证数据。
+除此之外，原备份中
 `telebox/assets` 下的全部插件数据都会完整保存到 `data/legacy-assets`：
 
 - 文件固定为不可执行的私有权限，不会被框架或插件自动运行。

@@ -27,6 +27,7 @@ type Request struct {
 	URL     string
 	Headers http.Header
 	Body    []byte
+	Timeout time.Duration
 }
 
 type Response struct {
@@ -43,6 +44,7 @@ type Client struct {
 	slots            chan struct{}
 	maxResponseBytes int64
 	userAgent        string
+	defaultTimeout   time.Duration
 }
 
 func New(cfg Config) (*Client, error) {
@@ -68,10 +70,10 @@ func New(cfg Config) (*Client, error) {
 		slots:            make(chan struct{}, cfg.MaxConcurrent),
 		maxResponseBytes: cfg.MaxResponseBytes,
 		userAgent:        userAgent,
+		defaultTimeout:   cfg.Timeout,
 	}
 	result.client = &http.Client{
 		Transport: transport,
-		Timeout:   cfg.Timeout,
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("stopped after 5 redirects")
@@ -96,6 +98,18 @@ func (c *Client) Do(ctx context.Context, request Request) (Response, error) {
 	}
 	if err := validateURL(parsed); err != nil {
 		return Response{}, err
+	}
+	timeout := request.Timeout
+	if timeout == 0 {
+		timeout = c.defaultTimeout
+	}
+	if timeout < 0 {
+		return Response{}, errors.New("HTTP request timeout must not be negative")
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 
 	select {

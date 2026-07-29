@@ -316,6 +316,27 @@ func (h *Host) Handle(
 		)
 		closeErr := output.Close()
 		return result, translateError(errors.Join(downloadErr, closeErr))
+	case MethodTelegramDownloadMediaPreview:
+		request, err := decode[DownloadRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		target, err := h.safeWritablePath(request.Path)
+		if err != nil {
+			return nil, err
+		}
+		output, err := os.Create(target)
+		if err != nil {
+			return nil, err
+		}
+		result, downloadErr := h.services.Telegram.DownloadMediaPreview(
+			ctx, request.ChatID, request.MessageID, output,
+		)
+		closeErr := output.Close()
+		return result, translateError(errors.Join(downloadErr, closeErr))
 	case MethodTelegramDownloadProfilePhoto:
 		request, err := decode[ProfilePhotoRequest](raw)
 		if err != nil {

@@ -84,9 +84,10 @@ type speedResult struct {
 }
 
 type Plugin struct {
-	services service.Container
-	assetDir string
-	workDir  string
+	services  service.Container
+	assetDir  string
+	legacyDir string
+	workDir   string
 
 	mu        sync.Mutex
 	masterKey []byte
@@ -99,16 +100,17 @@ func New(services service.Container) *Plugin {
 		assetDir = filepath.Join(os.TempDir(), "telebox-go-speedlink-assets")
 	}
 	return &Plugin{
-		services: services,
-		assetDir: assetDir,
-		workDir:  filepath.Join(os.TempDir(), "telebox-go-speedlink"),
+		services:  services,
+		assetDir:  assetDir,
+		legacyDir: legacySpeedlinkAssetDir(services.LegacyAssetsDir),
+		workDir:   filepath.Join(os.TempDir(), "telebox-go-speedlink"),
 	}
 }
 
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "speedlink",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "通过 SSH 在本机或多台远程服务器运行 Ookla Speedtest",
 	}
 }
@@ -329,6 +331,7 @@ func (p *Plugin) runLocal(ctx context.Context, request command.Request) error {
 	output, err := p.services.Tools.Run(ctx, toolrunner.Command{
 		Name:    executable,
 		Args:    []string{"--accept-license", "--accept-gdpr", "-f", "json"},
+		Env:     p.speedtestEnvironment(),
 		Timeout: 5 * time.Minute, MaxOutput: 512 << 10,
 	})
 	if err != nil {
@@ -340,6 +343,26 @@ func (p *Plugin) runLocal(ctx context.Context, request command.Request) error {
 		return p.respond(ctx, request, "❌ 解析本机测速结果失败："+err.Error())
 	}
 	return p.respond(ctx, request, formatSpeedResult("本机", result))
+}
+
+func (p *Plugin) speedtestEnvironment() []string {
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	if home == "" {
+		home = p.assetDir
+	}
+	configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	if configHome == "" {
+		configHome = filepath.Join(home, ".config")
+	}
+	dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+	if dataHome == "" {
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	return []string{
+		"HOME=" + home,
+		"XDG_CONFIG_HOME=" + configHome,
+		"XDG_DATA_HOME=" + dataHome,
+	}
 }
 
 func (p *Plugin) runRemoteMany(
@@ -547,31 +570,50 @@ func (p *Plugin) saveServers(ctx context.Context) error {
 }
 
 func (p *Plugin) migrateLegacy() ([]remoteServer, error) {
-	keyData, err := os.ReadFile(filepath.Join(p.assetDir, "secret.key"))
+	for _, directory := range uniquePaths(p.assetDir, p.legacyDir) {
+		result, found, err := p.migrateLegacyDirectory(directory)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return result, nil
+		}
+	}
+	return nil, nil
+}
+
+func (p *Plugin) migrateLegacyDirectory(directory string) ([]remoteServer, bool, error) {
+	if strings.TrimSpace(directory) == "" {
+		return nil, false, nil
+	}
+	keyData, err := os.ReadFile(filepath.Join(directory, "secret.key"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, nil
+		return nil, false, err
 	}
 	legacyKey := bytes.TrimSpace(keyData)
 	if len(legacyKey) != 32 {
-		return nil, errors.New("legacy speedlink key length is invalid")
+		return nil, false, errors.New("legacy speedlink key length is invalid")
 	}
 	var databasePath string
 	for _, name := range []string{"servers.db", "servers.db.bak"} {
-		candidate := filepath.Join(p.assetDir, name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		candidate := filepath.Join(directory, name)
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
 			databasePath = candidate
 			break
 		}
 	}
 	if databasePath == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 	database, err := sql.Open(
 		"sqlite",
 		"file:"+filepath.ToSlash(databasePath)+"?mode=ro",
 	)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	defer database.Close()
 	rows, err := database.Query(`
@@ -579,7 +621,7 @@ func (p *Plugin) migrateLegacy() ([]remoteServer, error) {
 		FROM servers ORDER BY id
 	`)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	defer rows.Close()
 	var result []remoteServer
@@ -593,23 +635,54 @@ func (p *Plugin) migrateLegacy() ([]remoteServer, error) {
 			&server.AuthMethod,
 			&server.Credential,
 		); err != nil {
-			return nil, err
+			return nil, true, err
 		}
 		if server.AuthMethod == "password" {
 			plain, err := decryptLegacyCredential(legacyKey, server.Credential)
 			if err != nil {
-				return nil, err
+				return nil, true, err
 			}
 			server.Credential, err = encryptCredential(p.masterKey, plain)
 			if err != nil {
-				return nil, err
+				return nil, true, err
 			}
 		}
 		// Legacy code disabled host-key checking. An empty fingerprint forces
 		// users to re-add the server before remote execution.
 		result = append(result, server)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, true, err
+	}
+	return result, true, nil
+}
+
+func legacySpeedlinkAssetDir(root string) string {
+	if strings.TrimSpace(root) == "" {
+		return ""
+	}
+	return filepath.Join(root, "speedlink")
+}
+
+func uniquePaths(values ...string) []string {
+	var result []string
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		cleaned := filepath.Clean(value)
+		duplicate := false
+		for _, existing := range result {
+			if filepath.Clean(existing) == cleaned {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func (p *Plugin) findSpeedtest() (string, error) {

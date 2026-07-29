@@ -36,7 +36,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "aban",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "单群及跨管理群封禁管理",
 	}
 }
@@ -46,6 +46,7 @@ func (p *Plugin) Commands() []command.Definition {
 		Name:        "aban",
 		Description: "显示封禁管理帮助",
 		Usage:       []string{"help aban"},
+		HelpHTML:    abanGuideHTML,
 		OwnerOnly:   true,
 		Handler:     p.help,
 	}}
@@ -438,3 +439,16 @@ func helpText(prefix string) string {
 		prefix + "unsb [@用户]  跨管理群解封\n" +
 		prefix + "refresh  刷新管理群缓存\n\n以上用户参数均可改为回复消息"
 }
+
+const abanGuideHTML = `<b>封禁管理</b>
+
+<code>{{prefix}}kick [@用户|用户ID]</code> 踢出
+<code>{{prefix}}ban [@用户|用户ID]</code> 封禁并清理消息
+<code>{{prefix}}unban [@用户|用户ID]</code> 解封
+<code>{{prefix}}mute [@用户|用户ID] [30s|10m|2h|7d]</code> 禁言；不填时间为永久
+<code>{{prefix}}unmute [@用户|用户ID]</code> 解除禁言
+<code>{{prefix}}sb [@用户|用户ID]</code> 在所有有管理权限的群组中封禁
+<code>{{prefix}}unsb [@用户|用户ID]</code> 在所有有管理权限的群组中解封
+<code>{{prefix}}refresh</code> 刷新管理群缓存
+
+用户参数均可改为回复目标消息。跨群操作只处理当前账号拥有相应管理权限的群组。`
