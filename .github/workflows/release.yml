@@ -37,14 +37,11 @@ jobs:
           built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           mkdir -p dist/release dist/stage
 
-          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
-            goos="${target%/*}"
-            goarch="${target#*/}"
+          for goarch in amd64 arm64; do
+            goos="linux"
             package="telebox-go_${version}_${goos}_${goarch}"
             stage="dist/stage/${package}"
             mkdir -p "${stage}"
-            suffix=""
-            if [[ "${goos}" == "windows" ]]; then suffix=".exe"; fi
 
             CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
               go build -trimpath \
@@ -52,17 +49,13 @@ jobs:
                 -X github.com/Acacia415/TeleBox-Go/internal/buildinfo.Version=${version} \
                 -X github.com/Acacia415/TeleBox-Go/internal/buildinfo.Commit=${commit} \
                 -X github.com/Acacia415/TeleBox-Go/internal/buildinfo.Date=${built_at}" \
-              -o "${stage}/telebox${suffix}" ./cmd/telebox
+              -o "${stage}/telebox" ./cmd/telebox
             CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
               go build -trimpath -ldflags "-s -w" \
-              -o "${stage}/telebox-migrate${suffix}" ./cmd/telebox-migrate
+              -o "${stage}/telebox-migrate" ./cmd/telebox-migrate
 
             cp config.example.json README.md scripts/install.sh "${stage}/"
-            if [[ "${goos}" == "windows" ]]; then
-              (cd dist/stage && zip -q -r "../release/${package}.zip" "${package}")
-            else
-              tar -C dist/stage -czf "dist/release/${package}.tar.gz" "${package}"
-            fi
+            tar -C dist/stage -czf "dist/release/${package}.tar.gz" "${package}"
           done
 
       - name: Build optional plugin packages
@@ -71,8 +64,8 @@ jobs:
           set -euo pipefail
           go run ./cmd/telebox-plugin-sdk release \
             -tag "${GITHUB_REF_NAME}" \
-            -platforms "linux/amd64,linux/arm64,windows/amd64,windows/arm64" \
-            -min-host "${GITHUB_REF_NAME#v}" \
+            -platforms "linux/amd64,linux/arm64" \
+            -min-host "0.4.0" \
             -output dist/plugins
           mv dist/plugins/catalog.json dist/release/plugin-catalog.json
           mv dist/plugins/*.zip dist/release/

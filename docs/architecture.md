@@ -12,7 +12,7 @@
 ## 插件模型
 
 不使用 Go 的动态 `.so` 插件。它受到编译器版本、平台和 ABI 限制，不适合
-同时支持 Linux amd64、arm64 和 Windows。
+稳定支持 Linux amd64、arm64 的独立发布与更新。
 
 主程序只编译 `internal/plugins/core`。`plugins/` 中的官方插件由
 `telebox-plugin-sdk` 分别编译为普通可执行文件，每个发布包包含：

@@ -40,11 +40,12 @@ curl -fsSL https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/i
 
 - Linux `amd64`
 - Linux `arm64`
-- 使用 systemd 用户服务
+- 使用 systemd
 - 可访问 Telegram 和 GitHub Release
 
 安装到当前用户目录，不要求 root。使用 root 安装时，文件会位于
-`/root` 下；普通用户安装时位于该用户的主目录下。
+`/root` 下，并创建系统级服务；普通用户安装时位于该用户的主目录下，
+安装器会启用 linger 后创建用户级服务。SSH 断开后两种服务都会继续运行。
 
 ## 3. 准备 Telegram API
 
@@ -74,7 +75,11 @@ curl -fsSL https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/i
 4. 下载与 CPU 架构匹配的正式版。
 5. 校验安装包 SHA-256。
 6. 完成 Telegram 登录。
-7. 创建并启动 systemd 用户服务。
+7. 创建并启动不会随 SSH 会话退出的 systemd 服务。
+
+从早期版本升级时建议重新运行一次一键安装命令。root 安装器会停止并移除
+旧的用户级 `telebox.service`，迁移为系统级服务，避免两个 Telegram 客户端
+同时运行。配置、会话、数据库和插件不会被删除。
 
 只安装、不登录：
 
@@ -142,12 +147,20 @@ set +a
 查看服务状态：
 
 ```bash
+# root 安装
+systemctl status telebox.service
+
+# 普通用户安装
 systemctl --user status telebox.service
 ```
 
 持续查看日志：
 
 ```bash
+# root 安装
+journalctl -u telebox.service -f
+
+# 普通用户安装
 journalctl --user -u telebox.service -f
 ```
 
@@ -348,17 +361,19 @@ curl -fsSL https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/i
 如果新版本无法启动，可以恢复：
 
 ```bash
-systemctl --user stop telebox.service
+systemctl stop telebox.service
 install -m 0755 ~/.local/bin/telebox.previous ~/.local/bin/telebox
-systemctl --user start telebox.service
+systemctl start telebox.service
 ```
+
+普通用户安装请在上面的 `systemctl` 后增加 `--user`。
 
 更新后检查：
 
 ```bash
 ~/.local/bin/telebox -version
-systemctl --user status telebox.service
-journalctl --user -u telebox.service -n 50 --no-pager
+systemctl status telebox.service
+journalctl -u telebox.service -n 50 --no-pager
 ```
 
 ### 更新插件
@@ -394,40 +409,43 @@ journalctl --user -u telebox.service -n 50 --no-pager
 
 ## 11. 服务管理
 
+下面默认展示 root 安装产生的系统级服务命令。普通用户安装时，在每条
+`systemctl` 或 `journalctl` 命令后增加 `--user`。
+
 启动：
 
 ```bash
-systemctl --user start telebox.service
+systemctl start telebox.service
 ```
 
 停止：
 
 ```bash
-systemctl --user stop telebox.service
+systemctl stop telebox.service
 ```
 
 重启：
 
 ```bash
-systemctl --user restart telebox.service
+systemctl restart telebox.service
 ```
 
 设置登录后自动启动：
 
 ```bash
-systemctl --user enable telebox.service
+systemctl enable telebox.service
 ```
 
 取消自动启动：
 
 ```bash
-systemctl --user disable telebox.service
+systemctl disable telebox.service
 ```
 
 重新加载服务配置：
 
 ```bash
-systemctl --user daemon-reload
+systemctl daemon-reload
 ```
 
 ## 12. 文件位置
@@ -439,7 +457,8 @@ systemctl --user daemon-reload
 | 主程序 | `~/.local/bin/telebox` |
 | JSON 配置 | `~/.config/telebox/config.json` |
 | 环境变量 | `~/.config/telebox/telebox.env` |
-| systemd 服务 | `~/.config/systemd/user/telebox.service` |
+| systemd 服务（root） | `/etc/systemd/system/telebox.service` |
+| systemd 服务（普通用户） | `~/.config/systemd/user/telebox.service` |
 | Telegram 会话 | `~/.local/share/telebox/session.json` |
 | SQLite 数据库 | `~/.local/share/telebox/telebox.db` |
 | 插件目录 | `~/.local/share/telebox/plugins` |
@@ -472,8 +491,10 @@ TELEBOX_LOG_FORMAT
 修改环境文件后重启：
 
 ```bash
-systemctl --user restart telebox.service
+systemctl restart telebox.service
 ```
+
+普通用户安装使用 `systemctl --user restart telebox.service`。
 
 建议：
 
@@ -606,11 +627,34 @@ curl -fsSL https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/i
   grep TELEBOX_INSTALL_LOGIN_MODE
 ```
 
+### SSH 断开后 Bot 失联
+
+v0.4.0 及更早安装器只创建用户级服务，root 的用户管理器可能在最后一个
+SSH 会话退出后停止。直接重新运行最新一键安装命令即可：root 会迁移为
+系统级服务，普通用户会启用 linger。然后检查：
+
+```bash
+# root 安装
+systemctl status telebox.service
+
+# 普通用户安装
+loginctl show-user "$USER" -p Linger
+systemctl --user status telebox.service
+```
+
+普通用户的 `Linger` 必须为 `yes`。如果安装器无法自动启用，可先执行：
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
 ### 服务启动后马上退出
 
 ```bash
-journalctl --user -u telebox.service -n 100 --no-pager
+journalctl -u telebox.service -n 100 --no-pager
 ```
+
+普通用户安装使用 `journalctl --user -u telebox.service -n 100 --no-pager`。
 
 重点检查：
 
@@ -633,15 +677,17 @@ journalctl --user -u telebox.service -n 100 --no-pager
 先检查状态和日志：
 
 ```bash
-systemctl --user status telebox.service
-journalctl --user -u telebox.service -n 100 --no-pager
+systemctl status telebox.service
+journalctl -u telebox.service -n 100 --no-pager
 ```
 
 然后手动重启：
 
 ```bash
-systemctl --user restart telebox.service
+systemctl restart telebox.service
 ```
+
+普通用户安装在这些命令后增加 `--user`。
 
 如果不是通过 systemd 运行，`-update` 替换程序后进程会退出，需要自行
 重新启动。
@@ -653,8 +699,10 @@ Telegram。可先确认本机版本并重启服务：
 
 ```bash
 ~/.local/bin/telebox -version
-systemctl --user restart telebox.service
+systemctl restart telebox.service
 ```
+
+普通用户安装使用 `systemctl --user restart telebox.service`。
 
 Telegram 客户端的“设备 → 活跃会话”页面可能需要重新打开后才刷新。
 
