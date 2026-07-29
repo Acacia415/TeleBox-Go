@@ -13,7 +13,7 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 - [x] SQLite 存储、迁移器、任务调度和统一关闭流程
 - [x] 已保留插件完成原版功能对照与 Go 移植
 - [x] 可校验的插件目录、按平台安装和独立进程运行
-- [x] Linux amd64/arm64 一键安装与 systemd 用户服务
+- [x] Linux amd64/arm64 一键安装与持久 systemd 服务
 - [x] GitHub Release SHA-256 校验与 Telegram 内框架自更新
 - [ ] 旧插件业务数据库的逐插件转换（AI、SpeedLink、Telegram Backup 已兼容）
 - [ ] Linux 隔离账号端到端验收
@@ -42,7 +42,8 @@ curl -fsSL https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/i
 安装器会识别 `amd64` 或 `arm64`、校验发布包 SHA-256，然后依次询问
 Telegram API ID、API Hash 和登录方式。可以选择直接扫描终端中的 QR
 二维码，也可以输入手机号、验证码以及账号启用时的二步验证密码。只有
-登录成功后才会启动 systemd 用户服务。
+登录成功后才会启动 systemd 服务。root 安装会使用系统级服务；普通用户
+安装会启用 linger 后使用用户级服务，两种方式都不会因 SSH 断开而停止。
 
 即使使用 `curl | sh`，安装器也会从 `/dev/tty` 读取输入，不会把管道
 内容误当成验证码。重新安装时不会显示已保存的 API ID；API Hash 和
@@ -80,20 +81,12 @@ set +a
 ## 手动运行
 
 从 [GitHub Releases](https://github.com/Acacia415/TeleBox-Go/releases)
-下载对应平台的压缩包：
+下载对应 Linux 架构的压缩包：
 
 ```bash
 cp config.example.json config.json
 ./telebox -config config.json -check-config
 ./telebox -config config.json
-```
-
-Windows PowerShell：
-
-```powershell
-Copy-Item config.example.json config.json
-.\telebox.exe -config .\config.json -check-config
-.\telebox.exe -config .\config.json
 ```
 
 ## 命令和插件
@@ -139,6 +132,9 @@ Copy-Item config.example.json config.json
 主程序初次安装不携带业务插件。通过 `-p i` 下载的压缩包会经过 HTTPS、
 大小限制和 SHA-256 校验，再安装到配置的插件目录。每个插件运行在独立
 子进程中；一个插件退出不会带崩 TeleBox，下一次调用会自动重新启动它。
+Release 中的 Linux 插件 ZIP 是按需安装和独立更新所必需的，不会在安装
+主程序时自动下载。正式 Release 不再发布缺少一键安装与守护流程的 Windows
+主程序和插件包。
 
 `yt-dlp` 可以通过 `-yt setup` 自动安装并校验上游程序，通过
 `-yt doctor` 检查 Deno、FFmpeg、Cookies 和代理。音视频转换等插件仍需要

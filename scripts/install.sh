@@ -162,9 +162,40 @@ need find
 need uname
 need mktemp
 need install
+need id
 if [ "$PERFORM_LOGIN" -eq 1 ]; then
     need stty
 fi
+
+INSTALL_UID="$(id -u)"
+INSTALL_USER="$(id -un)"
+if [ "$INSTALL_UID" -eq 0 ]; then
+    SERVICE_SCOPE="system"
+    SYSTEMD_DIR="/etc/systemd/system"
+    SERVICE_WANTED_BY="multi-user.target"
+else
+    SERVICE_SCOPE="user"
+    SYSTEMD_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
+    SERVICE_WANTED_BY="default.target"
+fi
+SERVICE_FILE="${SYSTEMD_DIR}/telebox.service"
+
+ensure_user_linger() {
+    [ "$SERVICE_SCOPE" = "user" ] || return 0
+    [ -e "/var/lib/systemd/linger/${INSTALL_USER}" ] && return 0
+    command -v loginctl >/dev/null 2>&1 || return 1
+    if [ "$(loginctl show-user "$INSTALL_USER" -p Linger --value 2>/dev/null || true)" = "yes" ]; then
+        return 0
+    fi
+    if loginctl enable-linger "$INSTALL_USER" >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v sudo >/dev/null 2>&1 &&
+        sudo -n loginctl enable-linger "$INSTALL_USER"; then
+        return 0
+    fi
+    return 1
+}
 
 ENV_FILE="${CONFIG_DIR}/telebox.env"
 SESSION_FILE="${DATA_DIR}/session.json"
@@ -315,7 +346,14 @@ EXAMPLE_SOURCE="$(find "${TEMP_DIR}/extract" -type f -name config.example.json -
 [ -n "$EXAMPLE_SOURCE" ] || fail "安装包中没有 config.example.json"
 
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user stop telebox.service >/dev/null 2>&1 || true
+    if [ "$SERVICE_SCOPE" = "system" ]; then
+        systemctl stop telebox.service >/dev/null 2>&1 || true
+        # v0.4.0 and earlier installed a root user service. Disable it before
+        # enabling the system service so two clients cannot run concurrently.
+        systemctl --user disable --now telebox.service >/dev/null 2>&1 || true
+    else
+        systemctl --user stop telebox.service >/dev/null 2>&1 || true
+    fi
 fi
 
 install -d -m 0755 "${PREFIX}/bin"
@@ -386,8 +424,6 @@ awk \
 }
 install -m 0600 "$ENV_OUTPUT" "$ENV_FILE"
 
-SYSTEMD_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
-SERVICE_FILE="${SYSTEMD_DIR}/telebox.service"
 install -d -m 0755 "$SYSTEMD_DIR"
 cat >"$SERVICE_FILE" <<EOF
 [Unit]
@@ -408,7 +444,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 
 [Install]
-WantedBy=default.target
+WantedBy=${SERVICE_WANTED_BY}
 EOF
 
 if [ "$NEED_LOGIN" -eq 1 ]; then
@@ -436,12 +472,36 @@ fi
 if [ "$START_SERVICE" -eq 1 ] &&
     [ -s "$SESSION_FILE" ] &&
     command -v systemctl >/dev/null 2>&1; then
-    if systemctl --user daemon-reload &&
+    if [ "$SERVICE_SCOPE" = "user" ] && ! ensure_user_linger; then
+        fail "无法启用 systemd linger；请先执行 sudo loginctl enable-linger ${INSTALL_USER}，再重新运行安装器"
+    fi
+    service_started=0
+    if [ "$SERVICE_SCOPE" = "system" ]; then
+        if systemctl daemon-reload &&
+            systemctl enable --now telebox.service; then
+            service_started=1
+        fi
+    elif systemctl --user daemon-reload &&
         systemctl --user enable --now telebox.service; then
+        service_started=1
+    fi
+    if [ "$service_started" -eq 1 ]; then
+        if [ "$SERVICE_SCOPE" = "system" ]; then
+            legacy_user_systemd="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
+            rm -f "${legacy_user_systemd}/default.target.wants/telebox.service"
+            rm -f "${legacy_user_systemd}/telebox.service"
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
+        fi
         printf 'TeleBox-Go 已安装、登录并启动。\n'
-        printf '查看日志：journalctl --user -u telebox -f\n'
+        if [ "$SERVICE_SCOPE" = "system" ]; then
+            printf '服务模式：系统级 systemd（SSH 退出后继续运行）\n'
+            printf '查看日志：journalctl -u telebox.service -f\n'
+        else
+            printf '服务模式：用户级 systemd + linger（SSH 退出后继续运行）\n'
+            printf '查看日志：journalctl --user -u telebox.service -f\n'
+        fi
     else
-        printf 'TeleBox-Go 已安装并完成登录，但当前用户的 systemd 服务未能启动。\n'
+        printf 'TeleBox-Go 已安装并完成登录，但 systemd 服务未能启动。\n'
         printf '可手动运行：set -a; . %s; set +a; %s/bin/telebox -config %s/config.json\n' \
             "$ENV_FILE" "$PREFIX" "$CONFIG_DIR"
     fi
@@ -452,7 +512,11 @@ else
     elif [ "$START_SERVICE" -eq 0 ]; then
         printf 'Telegram 登录已完成，未按 --no-start 要求启动服务。\n'
     fi
-    printf '启动服务：systemctl --user enable --now telebox.service\n'
+    if [ "$SERVICE_SCOPE" = "system" ]; then
+        printf '启动服务：systemctl enable --now telebox.service\n'
+    else
+        printf '启动服务：systemctl --user enable --now telebox.service\n'
+    fi
     printf '手动运行：set -a; . %s; set +a; %s/bin/telebox -config %s/config.json\n' \
         "$ENV_FILE" "$PREFIX" "$CONFIG_DIR"
 fi

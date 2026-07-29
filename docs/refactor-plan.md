@@ -12,7 +12,7 @@
 - [x] SQLite 状态/KV 存储和 schema migration
 - [x] 有界 HTTP 客户端、外部程序执行器和任务调度器
 - [x] 备份检查、GramJS/Telethon session 转换和目标资产提取
-- [x] Windows 二进制和 CI 构建
+- [x] Linux amd64/arm64 二进制和 CI 构建
 
 ## 第二阶段：备份内插件
 
@@ -75,5 +75,5 @@
   - [ ] 其余没有持久业务数据的插件进行 Linux 实机行为验收
 - [x] 使用备份做一次不输出密钥的真实 dry-run
 - [ ] 在隔离账号进行 Telegram 端到端兼容测试
-- [x] 编写 Windows/Linux 部署、升级和回滚说明
+- [x] 编写 Linux 部署、升级和回滚说明
 - [ ] 生成首个可替换旧程序的发布包
