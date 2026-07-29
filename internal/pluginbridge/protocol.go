@@ -35,6 +35,7 @@ const (
 	MethodTelegramGetMessages          = "telegram.get_messages"
 	MethodTelegramGetHistory           = "telegram.get_history"
 	MethodTelegramDownloadMedia        = "telegram.download_media"
+	MethodTelegramDownloadMediaPreview = "telegram.download_media_preview"
 	MethodTelegramDownloadProfilePhoto = "telegram.download_profile_photo"
 	MethodTelegramResolveUser          = "telegram.resolve_user"
 	MethodTelegramResolveChat          = "telegram.resolve_chat"

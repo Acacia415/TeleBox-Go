@@ -44,7 +44,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "gif",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "将 GIF 或短视频自适应压缩为 Telegram 视频贴纸",
 	}
 }
@@ -57,6 +57,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"gif（回复 GIF 或视频）",
 			"gif clear",
 		},
+		HelpHTML:  gifGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -361,6 +362,28 @@ func helpText(prefix string) string {
 		"自动迭代压缩至 ≤ 250 KiB、最长边 ≤ 512px、30 FPS。\n\n" +
 		prefix + "gif clear  清理临时文件"
 }
+
+const gifGuideHTML = `<b>🎭 GIF / 视频转贴纸</b>
+
+<b>处理方式</b>
+超过 3 秒的 GIF 或视频会加速到最多 3 秒，并逐步压缩到贴纸大小限制。
+
+<b>使用方法</b>
+回复包含 GIF 或视频的消息，然后发送 <code>{{prefix}}gif</code>
+
+<b>支持格式</b>
+GIF、MP4、AVI、MOV、WEBM 以及 FFmpeg 能读取的常见视频格式。
+
+<b>限制</b>
+• 原文件不超过 50 MiB
+• 原始时长不超过 10 秒
+• 输出不超过 250 KiB
+• 最长边不超过 512px
+• 帧率不超过 30 FPS
+
+<code>{{prefix}}gif clear</code> 清理临时转换文件
+
+系统必须安装 <code>ffmpeg</code> 和 <code>ffprobe</code>。`
 
 var stickerEmojis = []string{
 	"😀", "😁", "😂", "😎", "😍", "🤔", "😐", "🙄", "😢", "😭",

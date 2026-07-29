@@ -28,7 +28,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "nsticker",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "将回复的静态、动态或视频贴纸收藏到自己的贴纸包",
 	}
 }
@@ -44,6 +44,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"s to <包名>（回复贴纸）",
 			"s cancel",
 		},
+		HelpHTML:  stickerGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -277,3 +278,20 @@ func helpText(prefix string) string {
 		prefix + "s cancel\n\n" +
 		"支持静态、TGS 动态与 WebM 视频贴纸；自动包满后会创建下一包。"
 }
+
+const stickerGuideHTML = `<b>⭐ 贴纸收藏</b>
+
+<b>使用方法</b>
+回复贴纸后发送 <code>{{prefix}}s</code>，保存到默认包；未设置默认包时使用当前账号用户名创建贴纸包
+<code>{{prefix}}s &lt;已有包名&gt;</code> 设置永久默认包
+回复贴纸后发送 <code>{{prefix}}s to &lt;包名&gt;</code>，本次临时保存到指定包；不存在时创建
+<code>{{prefix}}s cancel</code> 取消默认包
+不回复贴纸时发送 <code>{{prefix}}s</code> 查看当前设置
+
+<b>支持类型</b>
+静态贴纸、TGS 动态贴纸和 WebM 视频贴纸。贴纸包达到上限后会创建下一个分包。
+
+<b>注意</b>
+• 首次使用前需先私聊 Telegram 官方 <code>@Stickers</code> 机器人
+• 贴纸包短名称只能包含字母、数字和下划线，并以字母开头
+• 自动创建贴纸包需要当前账号设置 Telegram 用户名`

@@ -59,6 +59,10 @@ func (c *UnavailableClient) DownloadMedia(context.Context, int64, int, io.Writer
 	return Media{}, fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
 }
 
+func (c *UnavailableClient) DownloadMediaPreview(context.Context, int64, int, io.Writer) (Media, error) {
+	return Media{}, fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
 func (c *UnavailableClient) DownloadProfilePhoto(context.Context, int64, io.Writer) error {
 	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
 }

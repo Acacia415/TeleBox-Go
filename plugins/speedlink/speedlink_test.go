@@ -4,10 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Acacia415/TeleBox-Go/internal/service"
 )
 
 func TestParseConnection(t *testing.T) {
@@ -101,5 +104,94 @@ func TestExtractSpeedtestArchive(t *testing.T) {
 	}
 	if !bytes.Equal(got, content) {
 		t.Fatalf("extracted = %q", got)
+	}
+}
+
+func TestSpeedtestEnvironmentWithoutSystemdHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_DATA_HOME", "")
+	assetDir := t.TempDir()
+	p := &Plugin{assetDir: assetDir}
+
+	got := strings.Join(p.speedtestEnvironment(), "\n")
+	for _, want := range []string{
+		"HOME=" + assetDir,
+		"XDG_CONFIG_HOME=" + filepath.Join(assetDir, ".config"),
+		"XDG_DATA_HOME=" + filepath.Join(assetDir, ".local", "share"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("environment does not contain %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestLegacySpeedlinkAssetDir(t *testing.T) {
+	root := t.TempDir()
+	got := legacySpeedlinkAssetDir(root)
+	want := filepath.Join(root, "speedlink")
+	if got != want {
+		t.Fatalf("legacy speedlink directory = %q, want %q", got, want)
+	}
+}
+
+func TestUniquePathsOmitsEmptyAndDuplicatePaths(t *testing.T) {
+	root := t.TempDir()
+	got := uniquePaths("", root, filepath.Join(root, "."))
+	if len(got) != 1 || filepath.Clean(got[0]) != filepath.Clean(root) {
+		t.Fatalf("unique paths = %#v", got)
+	}
+}
+
+func TestMigrateLegacyFallsBackToPreservedAssets(t *testing.T) {
+	root := t.TempDir()
+	legacyRoot := filepath.Join(root, "legacy-assets")
+	legacyDir := filepath.Join(legacyRoot, "speedlink")
+	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(legacyDir, "secret.key"),
+		bytes.Repeat([]byte{0x42}, 32),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", filepath.Join(legacyDir, "servers.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		CREATE TABLE servers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			host TEXT NOT NULL,
+			port INTEGER NOT NULL,
+			username TEXT NOT NULL,
+			auth_method TEXT NOT NULL,
+			credentials TEXT NOT NULL
+		);
+		INSERT INTO servers(name, host, port, username, auth_method, credentials)
+		VALUES ('测试节点', 'example.com', 22, 'root', 'key', '/tmp/id_ed25519');
+	`); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New(service.Container{
+		AssetsDir:       filepath.Join(root, "assets"),
+		LegacyAssetsDir: legacyRoot,
+	})
+	p.masterKey = bytes.Repeat([]byte{0x24}, 32)
+	servers, err := p.migrateLegacy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 || servers[0].Name != "测试节点" ||
+		servers[0].Host != "example.com" {
+		t.Fatalf("migrated servers = %#v", servers)
 	}
 }

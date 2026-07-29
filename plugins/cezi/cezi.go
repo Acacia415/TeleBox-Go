@@ -56,7 +56,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "cezi",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "使用 Groq 生产模型进行测字解签",
 	}
 }
@@ -72,6 +72,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"cezi model <模型名>",
 			"cezi baseurl <地址|clear>",
 		},
+		HelpHTML:  ceziGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -304,40 +305,58 @@ func (p *Plugin) writeConfig(ctx context.Context, key, value string) error {
 }
 
 func (p *Plugin) migrateLegacyConfig(ctx context.Context) error {
-	if p.services.AssetsDir == "" {
-		return nil
-	}
-	values, err := legacyconfig.ReadSQLiteConfig(
-		filepath.Join(p.services.AssetsDir, "cezi_config.db"),
-	)
-	if err != nil {
-		return err
-	}
 	mapping := map[string]string{
 		"cezi_api_key":  apiKeyName,
 		"cezi_model":    modelName,
 		"cezi_base_url": baseURLName,
 	}
 	imported := 0
-	for oldKey, newKey := range mapping {
-		value := strings.TrimSpace(values[oldKey])
-		if value == "" {
-			continue
-		}
-		if _, err := p.services.Storage.Get(ctx, "cezi", newKey); err == nil {
-			continue
-		} else if !errors.Is(err, storage.ErrNotFound) {
+	for _, databasePath := range legacyCeziConfigPaths(p.services) {
+		values, err := legacyconfig.ReadSQLiteConfig(databasePath)
+		if err != nil {
 			return err
 		}
-		if err := p.writeConfig(ctx, newKey, value); err != nil {
-			return err
+		for oldKey, newKey := range mapping {
+			value := strings.TrimSpace(values[oldKey])
+			if value == "" {
+				continue
+			}
+			if _, err := p.services.Storage.Get(ctx, "cezi", newKey); err == nil {
+				continue
+			} else if !errors.Is(err, storage.ErrNotFound) {
+				return err
+			}
+			if err := p.writeConfig(ctx, newKey, value); err != nil {
+				return err
+			}
+			imported++
 		}
-		imported++
 	}
 	if imported > 0 {
 		p.services.Logger.Info("migrated legacy cezi config", "keys", imported)
 	}
 	return nil
+}
+
+func legacyCeziConfigPaths(services service.Container) []string {
+	var result []string
+	for _, root := range []string{services.AssetsDir, services.LegacyAssetsDir} {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		candidate := filepath.Join(root, "cezi_config.db")
+		duplicate := false
+		for _, existing := range result {
+			if filepath.Clean(existing) == filepath.Clean(candidate) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, candidate)
+		}
+	}
+	return result
 }
 
 func (p *Plugin) respond(ctx context.Context, request command.Request, text string) error {
@@ -418,3 +437,28 @@ func helpText(prefix string) string {
 		prefix + "cezi model <模型名>\n" +
 		prefix + "cezi baseurl <地址|clear>\n\n默认模型：" + defaultModel
 }
+
+const ceziGuideHTML = `<b>🔮 测字算命</b>
+
+<b>使用方法</b>
+<code>{{prefix}}cezi &lt;汉字&gt;</code> 输入一个字进行测字
+回复一条文字消息后发送 <code>{{prefix}}cezi</code>，从消息中随机抽取一个有意义的汉字
+
+<b>配置</b>
+<code>{{prefix}}cezi apikey &lt;Groq API Key&gt;</code>
+<code>{{prefix}}cezi apikey clear</code>
+<code>{{prefix}}cezi model &lt;模型名&gt;</code>
+<code>{{prefix}}cezi baseurl &lt;地址&gt;</code>
+<code>{{prefix}}cezi baseurl clear</code>
+
+默认服务：Groq
+默认模型：<code>llama-3.3-70b-versatile</code>
+
+<b>获取 Groq API Key</b>
+1. 打开 https://console.groq.com/
+2. 使用 Google 或 GitHub 账号登录
+3. 进入 <code>API Keys</code>
+4. 选择 <code>Create API Key</code>
+5. 复制密钥并用上面的 <code>apikey</code> 命令保存
+
+如使用兼容的反向代理，可通过 <code>baseurl</code> 设置接口根地址。`

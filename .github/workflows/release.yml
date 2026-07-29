@@ -65,7 +65,7 @@ jobs:
           go run ./cmd/telebox-plugin-sdk release \
             -tag "${GITHUB_REF_NAME}" \
             -platforms "linux/amd64,linux/arm64" \
-            -min-host "0.4.0" \
+            -min-host "0.5.0" \
             -output dist/plugins
           mv dist/plugins/catalog.json dist/release/plugin-catalog.json
           mv dist/plugins/*.zip dist/release/

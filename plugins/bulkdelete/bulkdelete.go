@@ -26,7 +26,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "bulk_delete",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "批量删除范围消息或自己最近的消息",
 	}
 }
@@ -40,6 +40,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"bd <1–99>",
 			"bd on|off",
 		},
+		HelpHTML:  bulkDeleteGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -257,3 +258,17 @@ func helpText(prefix string, deleteOthers bool) string {
 		prefix + "bd <1–99>  删除自己最近的消息\n" +
 		prefix + "bd on/off  切换删除他人消息权限\n\n当前删除他人权限：" + mode
 }
+
+const bulkDeleteGuideHTML = `<b>批量删除</b>
+
+<b>范围删除</b>
+回复一条消息后发送 <code>{{prefix}}bd</code>，删除被回复消息到当前命令之间可删除的消息。
+
+<b>删除自己的近期消息</b>
+<code>{{prefix}}bd &lt;1–99&gt;</code>
+
+<b>删除权限</b>
+<code>{{prefix}}bd on</code> 允许范围删除包含他人消息
+<code>{{prefix}}bd off</code> 范围删除仅处理自己的消息
+
+Telegram 的管理权限和消息可删除时限仍然有效；无权限删除的消息会被跳过。`

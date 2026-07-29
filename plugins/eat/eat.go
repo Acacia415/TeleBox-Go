@@ -88,7 +88,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "将用户头像或回复图片合成到静态表情模板",
 	}
 }
@@ -103,6 +103,7 @@ func (p *Plugin) Commands() []command.Definition {
 				"eat set [配置地址]",
 				"eat clear",
 			},
+			HelpHTML:  eatGuideHTML,
 			OwnerOnly: true,
 			Handler: func(ctx context.Context, request command.Request) error {
 				return p.handle(ctx, request, false)
@@ -116,6 +117,7 @@ func (p *Plugin) Commands() []command.Definition {
 				"eat2 set [配置地址]",
 				"eat2 clear",
 			},
+			HelpHTML:  eatGuideHTML,
 			OwnerOnly: true,
 			Handler: func(ctx context.Context, request command.Request) error {
 				return p.handle(ctx, request, true)
@@ -713,3 +715,20 @@ func (w *boundedWriter) Write(data []byte) (int, error) {
 func init() {
 	image.RegisterFormat("jpeg", "jpeg", jpeg.Decode, jpeg.DecodeConfig)
 }
+
+const eatGuideHTML = `<b>头像静态表情</b>
+
+首次使用时读取远程模板配置；模板图片会按需下载并在当前进程中缓存。
+
+<code>{{prefix}}eat</code> 查看模板列表
+回复用户消息后发送 <code>{{prefix}}eat &lt;模板名&gt;</code>，使用双方头像生成表情
+回复用户消息后发送 <code>{{prefix}}eat</code>，随机选择模板
+
+<code>{{prefix}}eat2</code> 查看模板列表
+回复含图片的消息后发送 <code>{{prefix}}eat2 &lt;模板名&gt;</code>，使用消息图片生成表情
+回复含图片的消息后发送 <code>{{prefix}}eat2</code>，随机选择模板
+
+<code>{{prefix}}eat set [配置地址]</code> 更新模板配置
+<code>{{prefix}}eat clear</code> 清理内存中的配置和图片缓存
+
+<code>eat</code> 与 <code>eat2</code> 使用同一套模板配置，区别是前者读取头像，后者读取回复消息中的图片。`

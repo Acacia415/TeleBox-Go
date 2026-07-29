@@ -69,7 +69,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "ip",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "查询 IP 地址或域名的地理与网络信息",
 	}
 }
@@ -82,6 +82,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"ip <IP地址|域名>",
 			"ip（回复含 IP 或域名的消息）",
 		},
+		HelpHTML:  helpText("{{prefix}}"),
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}

@@ -383,6 +383,31 @@ func (p *telegramProxy) DownloadMedia(
 	return media, nil
 }
 
+func (p *telegramProxy) DownloadMediaPreview(
+	ctx context.Context,
+	chatID int64,
+	messageID int,
+	writer io.Writer,
+) (telegram.Media, error) {
+	target, cleanup, err := p.downloadTarget("media-preview")
+	if err != nil {
+		return telegram.Media{}, err
+	}
+	defer cleanup()
+	var media telegram.Media
+	if err := call(ctx, p.peer, MethodTelegramDownloadMediaPreview, DownloadRequest{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Path:      target,
+	}, &media); err != nil {
+		return telegram.Media{}, err
+	}
+	if err := copyFileToWriter(target, writer); err != nil {
+		return telegram.Media{}, err
+	}
+	return media, nil
+}
+
 func (p *telegramProxy) DownloadProfilePhoto(
 	ctx context.Context,
 	userID int64,

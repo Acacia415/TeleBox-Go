@@ -22,7 +22,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "dc",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "查询用户、群组或频道头像所在数据中心",
 	}
 }
@@ -36,6 +36,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"dc <@用户名|用户ID>",
 			"dc（回复目标消息）",
 		},
+		HelpHTML:  dcGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -126,6 +127,14 @@ func (p *Plugin) respond(ctx context.Context, request command.Request, text stri
 	)
 	return err
 }
+
+const dcGuideHTML = `<b>📍 头像数据中心</b>
+
+<code>{{prefix}}dc</code> 查询当前群组或频道头像所在的 DC
+<code>{{prefix}}dc &lt;@用户名|用户ID&gt;</code> 查询指定用户
+回复一条消息后发送 <code>{{prefix}}dc</code> 查询消息发送者
+
+Telegram 只在对象设置了头像时提供头像 DC；未设置头像时无法查询。`
 
 func formatChatDC(title string, photoDC int) string {
 	title = fallback(strings.TrimSpace(title), "当前聊天")

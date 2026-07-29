@@ -70,3 +70,29 @@ func TestClientRejectsLargeAndUnsafeResponses(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestTimeoutOverridesClientDefault(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		time.Sleep(40 * time.Millisecond)
+		_, _ = writer.Write([]byte("ok"))
+	}))
+	defer server.Close()
+	client, err := New(Config{
+		Timeout:          10 * time.Millisecond,
+		MaxConcurrent:    1,
+		MaxResponseBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	if _, err := client.Do(context.Background(), Request{
+		URL:     server.URL,
+		Timeout: 200 * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("request with timeout override failed: %v", err)
+	}
+}

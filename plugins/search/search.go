@@ -56,7 +56,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "search",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "多频道视频资源搜索、随机速览与广告过滤",
 	}
 }
@@ -77,6 +77,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"so import（回复配置文件）",
 			"so ad <add|del|list> [关键词]",
 		},
+		HelpHTML:  searchGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -910,6 +911,34 @@ func helpText(prefix string) string {
 		prefix + "so ad <add|del|list> [关键词]\n\n" +
 		"-r 随机选择，-s 以防剧透媒体重新上传"
 }
+
+const searchGuideHTML = `<b>🔍 多频道视频搜索</b>
+
+<b>搜索</b>
+<code>{{prefix}}so &lt;关键词&gt;</code> 在已配置频道中搜索视频
+<code>{{prefix}}so &lt;关键词&gt; -r</code> 从匹配结果中随机选择
+<code>{{prefix}}so &lt;关键词&gt; -s</code> 下载并以防剧透媒体重新发送
+<code>{{prefix}}so kkp [-s]</code> 随机选择时长 20 秒至 3 分钟的视频
+
+<b>频道管理</b>
+<code>{{prefix}}so add &lt;频道链接或 @用户名&gt;</code>
+一次添加多个频道时用反斜杠 <code>\</code> 分隔
+<code>{{prefix}}so del &lt;频道|序号&gt; [...]</code>
+<code>{{prefix}}so del all</code>
+<code>{{prefix}}so default &lt;频道|序号&gt;</code>
+<code>{{prefix}}so default d</code> 取消默认频道
+<code>{{prefix}}so list</code>
+
+<b>导入导出</b>
+<code>{{prefix}}so export</code>
+回复导出的配置文件后发送 <code>{{prefix}}so import</code>
+
+<b>广告关键词</b>
+<code>{{prefix}}so ad add &lt;关键词...&gt;</code>
+<code>{{prefix}}so ad del &lt;关键词...&gt;</code>
+<code>{{prefix}}so ad list</code>
+
+别名：<code>{{prefix}}search</code>`
 
 type limitedWriter struct {
 	io.Writer

@@ -54,7 +54,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "dig",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "使用纯 Go DNS 客户端查询常见记录",
 	}
 }
@@ -66,6 +66,7 @@ func (p *Plugin) Commands() []command.Definition {
 		Usage: []string{
 			"dig <域名> [记录类型] [@DNS服务器] [+short] [+tcp]",
 		},
+		HelpHTML:  helpText("{{prefix}}"),
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}

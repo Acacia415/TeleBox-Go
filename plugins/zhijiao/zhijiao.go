@@ -64,7 +64,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "zhijiao",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "使用廿七句杯卦卦辞掷筊",
 	}
 }
@@ -74,6 +74,7 @@ func (p *Plugin) Commands() []command.Definition {
 		Name:        "zhijiao",
 		Description: "掷筊",
 		Usage:       []string{"zhijiao"},
+		HelpHTML:    zhiJiaoGuideHTML,
 		OwnerOnly:   true,
 		Handler:     p.handle,
 	}}
@@ -185,3 +186,9 @@ func wait(ctx context.Context, delay time.Duration) error {
 		return ctx.Err()
 	}
 }
+
+const zhiJiaoGuideHTML = `<b>笅杯</b>
+
+<code>{{prefix}}zhijiao</code> 连续掷筊三次，并按廿七句杯卦卦辞显示结果。
+
+<code>☾</code> 与 <code>☽</code> 表示筊杯两面；结果分为胜、阳、阴三种。`

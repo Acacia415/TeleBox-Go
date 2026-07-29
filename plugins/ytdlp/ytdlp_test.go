@@ -3,6 +3,7 @@ package ytdlp
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -11,8 +12,31 @@ func TestParseManual(t *testing.T) {
 	if !ok || title != "晴天" || artist != "周杰伦" {
 		t.Fatalf("manual metadata = %q, %q, %v", title, artist, ok)
 	}
+	title, artist, ok = parseManual("晴天-周杰伦")
+	if !ok || title != "晴天" || artist != "周杰伦" {
+		t.Fatalf("compact manual metadata = %q, %q, %v", title, artist, ok)
+	}
 	if _, _, ok := parseManual("AC-DC Thunderstruck"); ok {
 		t.Fatal("unspaced hyphen was treated as manual metadata")
+	}
+}
+
+func TestYTHelpIncludesReverseProxyAndLoginGuidance(t *testing.T) {
+	got := ytHelpHTML("-")
+	for _, want := range []string{
+		"-yt baseurl",
+		"generativelanguage.googleapis.com",
+		"Cloudflare Workers",
+		"-yt proxy",
+		"-yt cookies",
+		"Sign in to confirm you’re not a bot",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help does not contain %q", want)
+		}
+	}
+	if strings.Contains(got, "{{prefix}}") {
+		t.Fatal("help contains an unresolved prefix placeholder")
 	}
 }
 

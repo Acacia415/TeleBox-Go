@@ -25,7 +25,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "jointime",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "查询用户加入群组的时间",
 	}
 }
@@ -40,6 +40,7 @@ func (p *Plugin) Commands() []command.Definition {
 			"jt（回复目标消息）",
 			"jt su [@用户名|用户ID]（或回复消息）",
 		},
+		HelpHTML:  joinTimeGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -282,3 +283,17 @@ func helpText(prefix string) string {
 		prefix + "jt su [@用户名]  扫描历史服务消息的精确模式\n\n" +
 		"精确模式最多扫描 100,000 条消息。"
 }
+
+const joinTimeGuideHTML = `<b>⏰ 入群时间查询</b>
+
+<b>普通查询</b>
+<code>{{prefix}}jt</code> 回复目标用户的消息
+<code>{{prefix}}jt &lt;@用户名|用户ID&gt;</code>
+
+<b>精确模式</b>
+<code>{{prefix}}jt su</code> 回复目标用户的消息
+<code>{{prefix}}jt su &lt;@用户名|用户ID&gt;</code>
+
+普通查询读取 Telegram 成员记录。管理员记录有时显示的是提权时间；<code>su</code> 会扫描聊天历史中的入群服务消息以寻找更早的记录，最多扫描 100,000 条消息。
+
+别名：<code>{{prefix}}jointime</code>`

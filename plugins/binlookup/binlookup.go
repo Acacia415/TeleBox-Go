@@ -76,7 +76,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "bin",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "查询银行卡 BIN/IIN 发行信息",
 	}
 }
@@ -86,6 +86,7 @@ func (p *Plugin) Commands() []command.Definition {
 		Name:        "bin",
 		Description: "查询 6–8 位银行卡 BIN/IIN",
 		Usage:       []string{"bin <6–8位卡头>"},
+		HelpHTML:    helpText("{{prefix}}"),
 		OwnerOnly:   true,
 		Handler:     p.handle,
 	}}
@@ -380,5 +381,5 @@ func helpText(prefix string) string {
 		"<code>" + commandName + " 卡头6-8位</code>\n\n" +
 		"<b>示例</b>\n" +
 		"<code>" + commandName + " 415042</code>\n\n" +
-		"<i>数据源：Binlist</i>"
+		"<i>数据源：Bincheck 补充卡组织、银行和国家信息，Binlist 提供其余字段</i>"
 }

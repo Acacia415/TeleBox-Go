@@ -30,7 +30,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "ids",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "查询用户、对话、消息及实体的详细信息",
 	}
 }
@@ -47,6 +47,7 @@ func (p *Plugin) Commands() []command.Definition {
 				"id <Telegram消息链接>",
 				"id（回复消息）",
 			},
+			HelpHTML:  idHelp("{{prefix}}"),
 			OwnerOnly: true,
 			Handler:   p.handleID,
 		},
@@ -57,6 +58,7 @@ func (p *Plugin) Commands() []command.Definition {
 				"entity [@用户名|用户ID|群组ID]",
 				"entity（回复消息）",
 			},
+			HelpHTML:  entityHelp("{{prefix}}"),
 			OwnerOnly: true,
 			Handler:   p.handleEntity,
 		},
@@ -64,6 +66,7 @@ func (p *Plugin) Commands() []command.Definition {
 			Name:        "msg",
 			Description: "以 JSON 查看回复消息的可移植字段",
 			Usage:       []string{"msg（回复消息）"},
+			HelpHTML:    messageHelp("{{prefix}}"),
 			OwnerOnly:   true,
 			Handler:     p.handleMessage,
 		},
@@ -71,6 +74,7 @@ func (p *Plugin) Commands() []command.Definition {
 			Name:        "echo",
 			Description: "原样复制回复的文字或媒体消息",
 			Usage:       []string{"echo（回复消息）"},
+			HelpHTML:    echoHelp("{{prefix}}"),
 			OwnerOnly:   true,
 			Handler:     p.handleEcho,
 		},

@@ -77,7 +77,7 @@ func NewGIF(services service.Container) *GIFPlugin {
 func (p *GIFPlugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eatgif",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "将双方头像逐帧合成到动态表情模板",
 	}
 }
@@ -91,6 +91,7 @@ func (p *GIFPlugin) Commands() []command.Definition {
 			"eatgif <模板名>（回复用户）",
 			"eatgif clear",
 		},
+		HelpHTML:  eatGIFGuideHTML,
 		OwnerOnly: true,
 		Handler:   p.handle,
 	}}
@@ -605,3 +606,11 @@ func gifHelpText(prefix string) string {
 		prefix + "eatgif clear  清理帧资源缓存\n\n" +
 		"模板帧会缓存在 data/assets/eatgif；输出自动压缩至 Telegram 贴纸限制。"
 }
+
+const eatGIFGuideHTML = `<b>🧩 头像融合动态贴纸</b>
+
+<code>{{prefix}}eatgif list</code> 查看动态模板列表
+回复目标用户的消息后发送 <code>{{prefix}}eatgif &lt;模板名&gt;</code>
+<code>{{prefix}}eatgif clear</code> 清理已缓存的模板帧
+
+模板配置和帧资源会按需下载，帧文件保存在 <code>data/assets/eatgif</code>。生成结果会转换并压缩为 Telegram 支持的视频贴纸。`
