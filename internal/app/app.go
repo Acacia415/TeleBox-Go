@@ -29,6 +29,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/storage"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
 	"github.com/Acacia415/TeleBox-Go/internal/toolrunner"
+	"github.com/Acacia415/TeleBox-Go/internal/usererror"
 )
 
 type App struct {
@@ -94,9 +95,10 @@ func New(
 		_ = store.Close()
 		return nil, fmt.Errorf("create command pool: %w", err)
 	}
+	safeTelegram := usererror.Wrap(client, logger)
 	services := service.Container{
 		Logger:          logger,
-		Telegram:        client,
+		Telegram:        safeTelegram,
 		Storage:         store,
 		Tools:           tools,
 		Scheduler:       jobScheduler,
@@ -154,7 +156,7 @@ func New(
 	return &App{
 		config:   cfg,
 		logger:   logger,
-		client:   client,
+		client:   safeTelegram,
 		router:   router,
 		registry: registry,
 		commands: commandPool,

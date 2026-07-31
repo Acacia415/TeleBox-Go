@@ -762,6 +762,19 @@ Telegram 客户端的“设备 → 活跃会话”页面可能需要重新打开
 
 同时检查 GitHub 网络连接、磁盘空间以及 TeleBox-Go 框架版本。
 
+### 错误提示和错误代码
+
+TeleBox-Go 会把 Telegram RPC、网络、系统文件和外部程序错误转换为简明的
+中文说明，同时保留“踢出失败”“保存失败”等操作上下文。已知错误不会再把
+调用链、文件路径、URL 或外部程序输出直接发到聊天中；无法准确识别时只显示
+稳定的错误代码。完整技术信息仍写入 systemd 日志，便于排查：
+
+```bash
+journalctl -u telebox.service -n 100 --no-pager
+```
+
+普通用户安装使用 `journalctl --user -u telebox.service -n 100 --no-pager`。
+
 ## 17. 获取帮助
 
 - 使用手册：本文件
