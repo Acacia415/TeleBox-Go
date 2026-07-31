@@ -53,14 +53,15 @@ func TestRegistryLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := router.Dispatch(context.Background(), telegram.Message{Text: ".test"})
+	message := telegram.Message{Text: ".test", Outgoing: true}
+	result, err := router.Dispatch(context.Background(), message)
 	if err != nil || !result.Matched {
 		t.Fatalf("Dispatch() result = %+v, error = %v", result, err)
 	}
 	if err := registry.Disable(context.Background(), "test"); err != nil {
 		t.Fatal(err)
 	}
-	result, err = router.Dispatch(context.Background(), telegram.Message{Text: ".test"})
+	result, err = router.Dispatch(context.Background(), message)
 	if err != nil || result.Matched {
 		t.Fatalf("disabled plugin still matched: %+v, error = %v", result, err)
 	}

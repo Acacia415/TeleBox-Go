@@ -390,6 +390,14 @@ func (a *App) Register(candidate plugin.Plugin) error {
 func (a *App) handleMessage(ctx context.Context, message telegram.Message) error {
 	_, commandLike := a.router.Parse(message)
 	listeners := a.registry.MessageListeners()
+	if commandLike && !a.router.IsAuthorized(message) {
+		a.logger.Debug(
+			"ignored command from unauthorized sender",
+			"sender_id", message.SenderID,
+			"chat_id", message.ChatID,
+		)
+		commandLike = false
+	}
 	if !commandLike && len(listeners) == 0 {
 		return nil
 	}

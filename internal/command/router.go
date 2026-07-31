@@ -186,7 +186,7 @@ func (r *Router) dispatch(
 	entry, exists := r.routes[request.Command]
 	owner := forceOwner || r.isOwnerLocked(message)
 	r.mu.RUnlock()
-	if !exists {
+	if !exists || !owner {
 		return DispatchResult{}, nil
 	}
 
@@ -195,8 +195,6 @@ func (r *Router) dispatch(
 		Plugin:  entry.plugin,
 		Command: entry.definition.Name,
 	}
-	// TeleBox is a user client. An outgoing message was authored by the
-	// authenticated account and is always an owner command.
 	if entry.definition.OwnerOnly && !owner {
 		return result, ErrPermissionDenied
 	}
@@ -244,6 +242,8 @@ func (r *Router) IsOwner(message telegram.Message) bool {
 }
 
 func (r *Router) isOwnerLocked(message telegram.Message) bool {
+	// TeleBox is a user client. An outgoing message was authored by the
+	// authenticated account and is always an owner command.
 	if message.Outgoing {
 		return true
 	}
@@ -258,6 +258,13 @@ func (r *Router) isOwnerLocked(message telegram.Message) bool {
 	}
 	_, allowedChat := r.delegateChats[message.ChatID]
 	return allowedChat
+}
+
+// IsAuthorized reports whether a command-like message came from the owner or
+// from a sudo delegate in an allowed chat. Ordinary incoming users are never
+// command senders, even for commands that are not marked OwnerOnly.
+func (r *Router) IsAuthorized(message telegram.Message) bool {
+	return r.IsOwner(message)
 }
 
 func (r *Router) SetDelegates(userIDs, chatIDs []int64) {
