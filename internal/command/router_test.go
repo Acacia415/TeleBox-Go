@@ -66,8 +66,42 @@ func TestRouterOwnerOnly(t *testing.T) {
 		SenderID: 7,
 		Text:     ".secret",
 	})
-	if !result.Matched || !errors.Is(err, ErrPermissionDenied) {
+	if result.Matched || err != nil {
 		t.Fatalf("Dispatch() result = %+v, error = %v", result, err)
+	}
+}
+
+func TestRouterIgnoresUntrustedIncomingCommand(t *testing.T) {
+	t.Parallel()
+
+	router, err := NewRouter([]string{"-"}, []int64{42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	if err := router.Register("core", Definition{
+		Name: "help",
+		Handler: func(context.Context, Request) error {
+			calls++
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := router.Dispatch(context.Background(), telegram.Message{
+		ID:       1,
+		ChatID:   -100123,
+		SenderID: 7,
+		Text:     "-help",
+	})
+	if err != nil || result.Matched || calls != 0 {
+		t.Fatalf(
+			"untrusted command result = %+v, calls = %d, error = %v",
+			result,
+			calls,
+			err,
+		)
 	}
 }
 
@@ -234,15 +268,21 @@ func TestRouterDelegateRespectsChatAllowlist(t *testing.T) {
 		SenderID: 7,
 		Text:     "-secret",
 	})
-	if !result.Matched || !errors.Is(err, ErrPermissionDenied) {
+	if result.Matched || err != nil {
 		t.Fatalf("blocked delegate result = %+v, error = %v", result, err)
+	}
+	if !router.IsOwner(telegram.Message{SenderID: 7, ChatID: -100123}) {
+		t.Fatal("sudo delegate was not treated as an authorized command sender")
+	}
+	if !router.IsAuthorized(telegram.Message{SenderID: 7, ChatID: -100123}) {
+		t.Fatal("sudo delegate was not authorized in an allowed chat")
 	}
 }
 
 func TestRouterSuppressionConsumesExactMessageOnce(t *testing.T) {
 	t.Parallel()
 
-	router, err := NewRouter([]string{"-"}, nil)
+	router, err := NewRouter([]string{"-"}, []int64{7})
 	if err != nil {
 		t.Fatal(err)
 	}
