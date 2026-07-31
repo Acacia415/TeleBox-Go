@@ -25,10 +25,13 @@ Environment:
   TELEBOX_INSTALL_LOGIN_MODE     qr or phone
   TELEBOX_INSTALL_VERSION
   TELEBOX_INSTALL_PREFIX
+  TELEBOX_MIGRATION_DIR          telebox-migrate conversion directory
+  TELEBOX_IMPORT_MIGRATION       auto, yes, or no
 
 Without environment overrides, the installer prompts for the API credentials
-and lets you choose QR or phone-number login. Interactive prompts work when the
-script is run through "curl ... | sh".
+and lets you choose QR or phone-number login. If a validated migration result
+is found, the installer asks whether to import it without replacing existing
+TeleBox-Go data. Interactive prompts work through "curl ... | sh".
 EOF
 }
 
@@ -89,6 +92,73 @@ read_env_value() {
             exit
         }
     ' "$file"
+}
+
+read_json_value() {
+    key="$1"
+    file="$2"
+    [ -f "$file" ] || return 0
+    awk -v key="$key" '
+        index($0, "\"" key "\"") {
+            value = $0
+            sub(/^[^:]*:[[:space:]]*/, "", value)
+            sub(/[[:space:]]*,?[[:space:]]*$/, "", value)
+            sub(/^"/, "", value)
+            sub(/"$/, "", value)
+            print value
+            exit
+        }
+    ' "$file"
+}
+
+migration_root_valid() {
+    root="$1"
+    [ -d "$root" ] &&
+        [ -f "$root/config.json" ] &&
+        [ -s "$root/data/session.json" ] &&
+        [ -f "$root/data/assets/_migration.json" ] &&
+        [ -d "$root/data/legacy-assets" ] || return 1
+    if [ -f "$root/data/legacy-assets/_legacy_manifest.json" ]; then
+        return 0
+    fi
+    manifest="$(find "$root/data/legacy-assets" -maxdepth 1 \
+        -type f -name '_legacy_manifest.*.json' -print 2>/dev/null |
+        awk 'NR == 1 { print; exit }')"
+    [ -n "$manifest" ]
+}
+
+find_migration_root() {
+    if [ -n "${TELEBOX_MIGRATION_DIR:-}" ]; then
+        migration_root_valid "$TELEBOX_MIGRATION_DIR" ||
+            fail "TELEBOX_MIGRATION_DIR 不是有效的迁移结果目录"
+        printf '%s\n' "$TELEBOX_MIGRATION_DIR"
+        return 0
+    fi
+    for candidate in "$PWD" "${HOME}/telebox-migration"; do
+        if migration_root_valid "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    marker="$(find "$HOME" -maxdepth 4 -type f \
+        -path '*/data/assets/_migration.json' -print 2>/dev/null |
+        awk 'NR == 1 { print; exit }')"
+    [ -n "$marker" ] || return 0
+    candidate="${marker%/data/assets/_migration.json}"
+    if migration_root_valid "$candidate"; then
+        printf '%s\n' "$candidate"
+    fi
+}
+
+migration_already_imported() {
+    root="$1"
+    source_sha="$(read_json_value \
+        source_sha256 "$root/data/assets/_migration.json")"
+    case "$source_sha" in
+        ""|*[!0-9a-f]*) return 1 ;;
+    esac
+    [ "${#source_sha}" -eq 64 ] || return 1
+    [ -f "${DATA_DIR}/legacy-assets/_imports/${source_sha}.json" ]
 }
 
 valid_api_id() {
@@ -197,12 +267,66 @@ ensure_user_linger() {
     return 1
 }
 
+MIGRATION_ROOT="$(find_migration_root)"
+MIGRATION_SETTING="${TELEBOX_IMPORT_MIGRATION:-auto}"
+case "$MIGRATION_SETTING" in
+    auto|1|yes|YES|true|TRUE|0|no|NO|false|FALSE) ;;
+    *) fail "TELEBOX_IMPORT_MIGRATION 必须是 auto、yes 或 no" ;;
+esac
+IMPORT_MIGRATION=0
+IMPORT_MIGRATION_SESSION=0
+MIGRATION_ALREADY_IMPORTED=0
+if [ -n "$MIGRATION_ROOT" ] &&
+    [ "$MIGRATION_SETTING" = "auto" ] &&
+    migration_already_imported "$MIGRATION_ROOT"; then
+    printf '检测到的原版迁移数据已经导入，本次跳过。\n'
+    MIGRATION_ALREADY_IMPORTED=1
+fi
+if [ -z "$MIGRATION_ROOT" ]; then
+    case "$MIGRATION_SETTING" in
+        1|yes|YES|true|TRUE)
+            fail "已要求导入迁移数据，但没有找到有效的迁移结果目录"
+            ;;
+    esac
+fi
+if [ -n "$MIGRATION_ROOT" ] && [ "$MIGRATION_ALREADY_IMPORTED" -eq 0 ]; then
+    case "$MIGRATION_SETTING" in
+        1|yes|YES|true|TRUE)
+            IMPORT_MIGRATION=1
+            ;;
+        0|no|NO|false|FALSE)
+            ;;
+        auto|"")
+            if has_tty; then
+                prompt_line "检测到原版迁移数据 ${MIGRATION_ROOT}，是否导入？[Y/n]："
+                case "$REPLY" in
+                    n|N|no|NO|No) ;;
+                    *) IMPORT_MIGRATION=1 ;;
+                esac
+            else
+                printf '检测到原版迁移数据，但当前没有交互终端，已跳过自动导入。\n'
+                printf '如需导入，请设置 TELEBOX_IMPORT_MIGRATION=yes 后重新运行。\n'
+            fi
+            ;;
+    esac
+fi
+IMPORT_MIGRATION_SESSION="$IMPORT_MIGRATION"
+MIGRATED_API_ID=""
+MIGRATED_API_HASH=""
+if [ "$IMPORT_MIGRATION" -eq 1 ] ||
+    [ "$MIGRATION_ALREADY_IMPORTED" -eq 1 ]; then
+    MIGRATED_API_ID="$(read_json_value api_id "$MIGRATION_ROOT/config.json")"
+    MIGRATED_API_HASH="$(read_json_value api_hash "$MIGRATION_ROOT/config.json")"
+fi
+
 ENV_FILE="${CONFIG_DIR}/telebox.env"
 SESSION_FILE="${DATA_DIR}/session.json"
 EXISTING_API_ID="$(read_env_value TELEBOX_API_ID "$ENV_FILE")"
 EXISTING_API_HASH="$(read_env_value TELEBOX_API_HASH "$ENV_FILE")"
-API_ID="${TELEBOX_API_ID:-$EXISTING_API_ID}"
-API_HASH="${TELEBOX_API_HASH:-$EXISTING_API_HASH}"
+EXISTING_CONFIG_API_ID="$(read_json_value api_id "${CONFIG_DIR}/config.json")"
+EXISTING_CONFIG_API_HASH="$(read_json_value api_hash "${CONFIG_DIR}/config.json")"
+API_ID="${TELEBOX_API_ID:-${EXISTING_API_ID:-${EXISTING_CONFIG_API_ID:-$MIGRATED_API_ID}}}"
+API_HASH="${TELEBOX_API_HASH:-${EXISTING_API_HASH:-${EXISTING_CONFIG_API_HASH:-$MIGRATED_API_HASH}}}"
 LOGIN_MODE="${TELEBOX_INSTALL_LOGIN_MODE:-}"
 NEED_LOGIN="$PERFORM_LOGIN"
 REPLACE_SESSION=0
@@ -245,11 +369,22 @@ if [ "$PERFORM_LOGIN" -eq 1 ]; then
         done
     fi
 
-    if [ -s "$SESSION_FILE" ]; then
-        prompt_line "检测到已有登录会话，是否继续使用？[Y/n]："
+    DETECTED_SESSION_FILE="$SESSION_FILE"
+    DETECTED_SESSION_TEXT="已有登录会话"
+    if [ ! -s "$DETECTED_SESSION_FILE" ] &&
+        [ "$IMPORT_MIGRATION" -eq 1 ] &&
+        [ -s "$MIGRATION_ROOT/data/session.json" ]; then
+        DETECTED_SESSION_FILE="$MIGRATION_ROOT/data/session.json"
+        DETECTED_SESSION_TEXT="原版迁移登录会话"
+    fi
+    if [ -s "$DETECTED_SESSION_FILE" ]; then
+        prompt_line "检测到${DETECTED_SESSION_TEXT}，是否继续使用？[Y/n]："
         case "$REPLY" in
             n|N|no|NO|No)
-                REPLACE_SESSION=1
+                if [ "$DETECTED_SESSION_FILE" = "$SESSION_FILE" ]; then
+                    REPLACE_SESSION=1
+                fi
+                IMPORT_MIGRATION_SESSION=0
                 ;;
             *)
                 NEED_LOGIN=0
@@ -342,6 +477,8 @@ tar -xzf "${TEMP_DIR}/${ASSET}" -C "${TEMP_DIR}/extract"
 
 TELEBOX_SOURCE="$(find "${TEMP_DIR}/extract" -type f -name telebox -print | awk 'NR == 1')"
 [ -n "$TELEBOX_SOURCE" ] || fail "安装包中没有 telebox"
+MIGRATOR_SOURCE="$(find "${TEMP_DIR}/extract" -type f -name telebox-migrate -print | awk 'NR == 1')"
+[ -n "$MIGRATOR_SOURCE" ] || fail "安装包中没有 telebox-migrate"
 EXAMPLE_SOURCE="$(find "${TEMP_DIR}/extract" -type f -name config.example.json -print | awk 'NR == 1')"
 [ -n "$EXAMPLE_SOURCE" ] || fail "安装包中没有 config.example.json"
 
@@ -360,6 +497,29 @@ install -d -m 0755 "${PREFIX}/bin"
 install -d -m 0700 "$CONFIG_DIR" "$DATA_DIR" \
     "${DATA_DIR}/assets" "${DATA_DIR}/legacy-assets" "${DATA_DIR}/plugins"
 install -m 0755 "$TELEBOX_SOURCE" "${PREFIX}/bin/telebox"
+install -m 0755 "$MIGRATOR_SOURCE" "${PREFIX}/bin/telebox-migrate"
+if [ "$REPLACE_SESSION" -eq 1 ] && [ -e "$SESSION_FILE" ]; then
+    backup_session "$SESSION_FILE"
+fi
+if [ "$IMPORT_MIGRATION" -eq 1 ]; then
+    printf '正在导入原版迁移数据；已有的 Go 数据不会被覆盖...\n'
+    if [ "$IMPORT_MIGRATION_SESSION" -eq 1 ]; then
+        "${PREFIX}/bin/telebox-migrate" import \
+            -source "$MIGRATION_ROOT" \
+            -config "${CONFIG_DIR}/config.json" \
+            -session "$SESSION_FILE" \
+            -assets "${DATA_DIR}/assets" \
+            -legacy-assets "${DATA_DIR}/legacy-assets"
+    else
+        "${PREFIX}/bin/telebox-migrate" import \
+            -source "$MIGRATION_ROOT" \
+            -config "${CONFIG_DIR}/config.json" \
+            -session "$SESSION_FILE" \
+            -assets "${DATA_DIR}/assets" \
+            -legacy-assets "${DATA_DIR}/legacy-assets" \
+            -skip-session
+    fi
+fi
 install -m 0644 "$EXAMPLE_SOURCE" "${CONFIG_DIR}/config.example.json"
 if [ ! -f "${CONFIG_DIR}/config.json" ]; then
     install -m 0600 "$EXAMPLE_SOURCE" "${CONFIG_DIR}/config.json"
@@ -453,9 +613,6 @@ WantedBy=${SERVICE_WANTED_BY}
 EOF
 
 if [ "$NEED_LOGIN" -eq 1 ]; then
-    if [ "$REPLACE_SESSION" -eq 1 ] && [ -e "$SESSION_FILE" ]; then
-        backup_session "$SESSION_FILE"
-    fi
     printf '\n开始 Telegram 登录，请按终端提示操作。\n' >"$TTY_PATH"
     if ! TELEBOX_API_ID="$API_ID" \
         TELEBOX_API_HASH="$API_HASH" \

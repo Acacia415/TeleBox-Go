@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Acacia415/TeleBox-Go/internal/legacyconfig"
 	"github.com/Acacia415/TeleBox-Go/internal/storage"
 	_ "modernc.org/sqlite"
 )
@@ -18,10 +19,12 @@ func (p *Plugin) migrateLegacy(ctx context.Context) error {
 		return nil
 	}
 	var databasePath string
-	for _, candidate := range []string{
-		filepath.Join(p.services.AssetsDir, "ai_config.db"),
-		filepath.Join(p.services.AssetsDir, "ai", "ai_config.db"),
-	} {
+	for _, candidate := range legacyconfig.CandidatePaths(
+		p.services.AssetsDir,
+		p.services.LegacyAssetsDir,
+		"ai_config.db",
+		"ai/ai_config.db",
+	) {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			databasePath = candidate
 			break

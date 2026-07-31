@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,13 +59,28 @@ func (p *Plugin) loadAccessState(
 		p.services.Logger.Warn("load persisted access state", "key", key, "error", err)
 		return accessState{}
 	}
-	legacy, err := legacyconfig.ReadAccessDatabase(
-		filepath.Join(p.services.AssetsDir, filepath.FromSlash(legacyPath)),
-		includeMessages,
-	)
-	if err != nil {
-		p.services.Logger.Warn("read legacy access database", "path", legacyPath, "error", err)
-		return accessState{}
+	var legacy legacyconfig.AccessDatabase
+	for _, databasePath := range legacyconfig.CandidatePaths(
+		p.services.AssetsDir,
+		p.services.LegacyAssetsDir,
+		legacyPath,
+	) {
+		candidate, err := legacyconfig.ReadAccessDatabase(
+			databasePath,
+			includeMessages,
+		)
+		if err != nil {
+			p.services.Logger.Warn(
+				"read legacy access database",
+				"path", databasePath,
+				"error", err,
+			)
+			continue
+		}
+		if len(candidate.Users)+len(candidate.Chats)+len(candidate.Messages) > 0 {
+			legacy = candidate
+			break
+		}
 	}
 	result := accessState{}
 	for _, item := range legacy.Users {

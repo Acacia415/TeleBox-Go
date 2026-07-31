@@ -508,9 +508,10 @@ systemctl restart telebox.service
 正式发布包中包含 `telebox-migrate`。它只用于首次迁移原版 TeleBox 的
 `.tar.gz` 全量备份，不用于恢复 `-bf` 创建的 TeleBox-Go 备份。
 
-一键安装不会自动寻找或上传其他电脑上的原版备份。需要先把自己的
-`.tar.gz` 备份上传到目标机器，再明确执行下面的 `inspect` 和 `convert`；
-没有提供备份文件时，新安装不会恢复任何用户的旧数据。
+一键安装不会上传其他电脑上的原版备份。需要先把自己的 `.tar.gz` 备份
+上传到目标机器，再明确执行下面的 `inspect` 和 `convert`。转换完成后，
+安装器会在当前目录、`~/telebox-migration` 和用户目录下的标准迁移布局中
+寻找结果，并询问是否导入；没有找到迁移结果时仍按普通新安装执行。
 
 建议在独立空目录中转换并测试，迁移器会拒绝覆盖已有配置、会话或资源目录：
 
@@ -549,12 +550,40 @@ cd ~/telebox-migration
   -apply
 ```
 
-转换完成后先检查配置并启动：
+保持迁移结果位于 `~/telebox-migration`，然后运行一键安装：
 
 ```bash
-/path/to/telebox -config config.json -check-config
-/path/to/telebox -config config.json
+curl -fsSL \
+  https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/install.sh |
+  sh
 ```
+
+安装器检测到迁移结果后会显示目录并询问是否导入。导入经过迁移清单验证，
+只复制目标中不存在的文件：
+
+- 已有 TeleBox-Go 配置、会话和插件数据不会被覆盖。
+- 原版支持的数据进入活动资产目录，插件首次启动时写入 Go 版 SQLite。
+- 暂无对应 Go 插件的数据进入完整保留目录；以后安装对应插件时仍可读取。
+- 导入过程可以重复执行，已经存在的文件会标记为“已存在”并跳过。
+
+迁移结果不在标准目录时，可以明确指定：
+
+```bash
+TELEBOX_MIGRATION_DIR=/path/to/converted \
+TELEBOX_IMPORT_MIGRATION=yes \
+  sh install.sh
+```
+
+安装器现在会把 `telebox-migrate` 安装到 `~/.local/bin`。已经安装 Go 版后
+也可以手动安全接管迁移结果：
+
+```bash
+~/.local/bin/telebox-migrate import \
+  -source /path/to/converted
+```
+
+手动导入默认使用当前用户的正式 TeleBox-Go 目录；加 `-skip-session` 可保留
+当前登录且不复制迁移会话。运行中的安装建议先停止服务，导入后再启动。
 
 主程序只内置核心功能，迁移器不会把旧 TypeScript 插件作为 Go 插件安装。
 登录成功后在 Telegram 中安装当前官方插件：
@@ -564,11 +593,10 @@ cd ~/telebox-migration
 -p doctor
 ```
 
-旧 alias、sudo、sure 和当前 Go 插件支持的数据会从迁移后的活动资产中读取，
-并在插件首次启动时写入 Go 版存储。插件也会检查完整保留目录，因此先迁移、
-以后再安装对应 Go 插件时仍可导入旧数据。比如 `cezi_config.db` 会恢复测字
-配置，`speedlink/secret.key` 与 `servers.db` 会恢复原版服务器列表和认证数据。
-除此之外，原备份中
+旧 alias、sudo、sure、AI、Cezi、Convert、YT、SpeedLink、Trace 等已支持
+数据会从活动资产或完整保留目录读取，并在插件首次启动时写入 Go 版存储。
+例如 `cezi_config.db` 会恢复测字配置，`speedlink/secret.key` 与
+`servers.db` 会恢复原版服务器列表和认证数据。除此之外，原备份中
 `telebox/assets` 下的全部插件数据都会完整保存到 `data/legacy-assets`：
 
 - 文件固定为不可执行的私有权限，不会被框架或插件自动运行。
@@ -576,9 +604,9 @@ cd ~/telebox-migration
 - 暂不支持的旧插件不会被启用，但其数据可由未来的 Go 插件安全导入。
 - 原压缩包不会被修改，也不会复制旧 API 配置或登录会话到该目录。
 
-如果目标机器已经通过一键脚本运行 TeleBox-Go，不要直接覆盖正在使用的
-`~/.config/telebox` 或 `~/.local/share/telebox`。应先停止服务，在独立目录
-完成转换和启动验证，再把确认后的配置、会话和资产迁入正式目录。
+如果目标机器已经运行 TeleBox-Go，不要手工覆盖 `~/.config/telebox` 或
+`~/.local/share/telebox`。重新运行安装器并确认导入，或停止服务后使用
+`telebox-migrate import`；两种方式都会保留已有 Go 文件。
 
 迁移完成并开始使用 TeleBox-Go 后，日常备份与恢复使用下面的 `-bf` 和
 `-hf`，不再使用 `telebox-migrate`。

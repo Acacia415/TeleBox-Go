@@ -52,7 +52,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "convert",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "将回复的视频或媒体文件转换为 MP3",
 	}
 }
@@ -518,28 +518,38 @@ func (p *Plugin) writeConfig(ctx context.Context, key, value string) error {
 }
 
 func (p *Plugin) migrateLegacyConfig(ctx context.Context) error {
-	if p.services.AssetsDir == "" {
+	for _, databasePath := range legacyconfig.CandidatePaths(
+		p.services.AssetsDir,
+		p.services.LegacyAssetsDir,
+		"convert/gemini_config.db",
+	) {
+		values, err := legacyconfig.ReadSQLiteConfig(databasePath)
+		if err != nil {
+			return err
+		}
+		value := strings.TrimSpace(values["convert_gemini_api_key"])
+		if value == "" {
+			continue
+		}
+		if _, err := p.services.Storage.Get(
+			ctx,
+			"convert",
+			"api_key",
+		); err == nil {
+			return nil
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
+		if err := p.writeConfig(ctx, "api_key", value); err != nil {
+			return err
+		}
+		p.services.Logger.Info(
+			"migrated legacy convert config",
+			"keys", 1,
+			"path", databasePath,
+		)
 		return nil
 	}
-	values, err := legacyconfig.ReadSQLiteConfig(
-		filepath.Join(p.services.AssetsDir, "convert", "gemini_config.db"),
-	)
-	if err != nil {
-		return err
-	}
-	value := strings.TrimSpace(values["convert_gemini_api_key"])
-	if value == "" {
-		return nil
-	}
-	if _, err := p.services.Storage.Get(ctx, "convert", "api_key"); err == nil {
-		return nil
-	} else if !errors.Is(err, storage.ErrNotFound) {
-		return err
-	}
-	if err := p.writeConfig(ctx, "api_key", value); err != nil {
-		return err
-	}
-	p.services.Logger.Info("migrated legacy convert config", "keys", 1)
 	return nil
 }
 

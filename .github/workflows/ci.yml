@@ -18,6 +18,8 @@ jobs:
           cache-dependency-path: go.sum
       - name: Format
         run: test -z "$(gofmt -l .)"
+      - name: Check installer syntax
+        run: sh -n scripts/install.sh
       - name: Vet
         run: go vet ./...
       - name: Test
