@@ -1,10 +1,17 @@
 package ytdlp
 
 import (
+	"context"
+	"database/sql"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Acacia415/TeleBox-Go/internal/service"
+	appstorage "github.com/Acacia415/TeleBox-Go/internal/storage"
 )
 
 func TestParseManual(t *testing.T) {
@@ -78,5 +85,60 @@ func TestFindOutputPathRejectsOutsideJob(t *testing.T) {
 func TestSafeFilename(t *testing.T) {
 	if got := safeFilename(`a:/b*?"<>|`); got != "ab" {
 		t.Fatalf("safe filename = %q", got)
+	}
+}
+
+func TestMigrateLegacyYTConfigFromPreservedAssets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	legacyRoot := filepath.Join(root, "legacy-assets")
+	if err := os.MkdirAll(legacyRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open(
+		"sqlite",
+		filepath.Join(legacyRoot, "ytdlp_gemini_config.db"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+		INSERT INTO config(key, value) VALUES
+			('ytdlp_gemini_api_key', 'legacy-yt-test-key'),
+			('ytdlp_gemini_base_url', 'https://proxy.example.test');
+	`); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := appstorage.Open(ctx, filepath.Join(root, "telebox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	p := New(service.Container{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Storage:         store,
+		LegacyAssetsDir: legacyRoot,
+	})
+	if err := p.migrateLegacyConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"api_key":  "legacy-yt-test-key",
+		"base_url": "https://proxy.example.test",
+	} {
+		got, err := store.Get(ctx, "yt-dlp", key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("migrated YT %s = %q", key, got)
+		}
 	}
 }

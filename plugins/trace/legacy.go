@@ -10,29 +10,34 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Acacia415/TeleBox-Go/internal/legacyconfig"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
 	_ "modernc.org/sqlite"
 )
 
 func (p *Plugin) loadLegacyState() (traceState, bool, error) {
-	if p.services.AssetsDir == "" {
-		return traceState{}, false, nil
-	}
-	directory := filepath.Join(p.services.AssetsDir, "trace")
-	state, found, err := loadLegacyTraceSQLite(filepath.Join(directory, "trace.db"))
-	if err != nil {
-		return traceState{}, false, err
-	}
-	if found {
-		return state, true, nil
-	}
-	for _, name := range []string{"db.json", "trace_db.json"} {
-		state, found, err = loadLegacyTraceJSON(filepath.Join(directory, name))
+	for _, directory := range legacyconfig.CandidatePaths(
+		p.services.AssetsDir,
+		p.services.LegacyAssetsDir,
+		"trace",
+	) {
+		state, found, err := loadLegacyTraceSQLite(
+			filepath.Join(directory, "trace.db"),
+		)
 		if err != nil {
 			return traceState{}, false, err
 		}
 		if found {
 			return state, true, nil
+		}
+		for _, name := range []string{"db.json", "trace_db.json"} {
+			state, found, err = loadLegacyTraceJSON(filepath.Join(directory, name))
+			if err != nil {
+				return traceState{}, false, err
+			}
+			if found {
+				return state, true, nil
+			}
 		}
 	}
 	return traceState{}, false, nil

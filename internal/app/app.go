@@ -267,12 +267,25 @@ func (a *App) restoreCommandAliases(ctx context.Context) {
 		return
 	}
 
-	aliases, err := legacyconfig.ReadAliases(
-		filepath.Join(a.config.Storage.AssetsPath, "alias", "alias.db"),
-	)
-	if err != nil {
-		a.logger.Error("read legacy command aliases", "error", err)
-		return
+	var aliases map[string]string
+	for _, databasePath := range legacyconfig.CandidatePaths(
+		a.config.Storage.AssetsPath,
+		a.config.Storage.LegacyAssetsPath,
+		"alias/alias.db",
+	) {
+		candidate, readErr := legacyconfig.ReadAliases(databasePath)
+		if readErr != nil {
+			a.logger.Error(
+				"read legacy command aliases",
+				"path", databasePath,
+				"error", readErr,
+			)
+			continue
+		}
+		if len(candidate) > 0 {
+			aliases = candidate
+			break
+		}
 	}
 	if len(aliases) == 0 {
 		return

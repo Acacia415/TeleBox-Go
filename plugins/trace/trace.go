@@ -53,7 +53,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "trace",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "按用户或关键词自动发送 Telegram reaction",
 	}
 }

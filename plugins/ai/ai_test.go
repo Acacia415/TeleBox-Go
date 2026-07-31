@@ -1,8 +1,17 @@
 package ai
 
 import (
+	"context"
+	"database/sql"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Acacia415/TeleBox-Go/internal/service"
+	appstorage "github.com/Acacia415/TeleBox-Go/internal/storage"
 )
 
 func TestCombineQuestion(t *testing.T) {
@@ -84,6 +93,53 @@ func TestConvertLegacyHistory(t *testing.T) {
 		history[1].Role != "assistant" ||
 		history[1].Text != "你好！" {
 		t.Fatalf("history = %#v", history)
+	}
+}
+
+func TestMigrateLegacyAIConfigFromPreservedAssets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	legacyRoot := filepath.Join(root, "legacy-assets")
+	if err := os.MkdirAll(legacyRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", filepath.Join(legacyRoot, "ai_config.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+		INSERT INTO config(key, value) VALUES
+			('ai_active_provider', 'gemini'),
+			('ai_api_key', 'legacy-ai-test-key');
+	`); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := appstorage.Open(ctx, filepath.Join(root, "telebox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	p := New(service.Container{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Storage:         store,
+		LegacyAssetsDir: legacyRoot,
+	})
+	if err := p.migrateLegacy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, "ai", "key.gemini")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "legacy-ai-test-key" {
+		t.Fatalf("migrated AI key = %q", got)
 	}
 }
 

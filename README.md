@@ -15,7 +15,8 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 - [x] 可校验的插件目录、按平台安装和独立进程运行
 - [x] Linux amd64/arm64 一键安装与持久 systemd 服务
 - [x] GitHub Release SHA-256 校验与 Telegram 内框架自更新
-- [ ] 旧插件业务数据库的逐插件转换（AI、SpeedLink、Telegram Backup 已兼容）
+- [x] 安装器自动接管迁移结果，支持插件后装时延迟恢复旧配置
+- [ ] 其余未移植插件业务数据库的逐插件转换（原文件已完整保留）
 - [ ] Linux 隔离账号端到端验收
 
 本仓库只提供全量备份中实际安装过的插件：
@@ -45,6 +46,11 @@ Telegram API ID、API Hash 和登录方式。可以选择直接扫描终端中�
 登录成功后才会启动 systemd 服务。root 安装会使用系统级服务；普通用户
 安装会启用 linger 后使用用户级服务，两种方式都不会因 SSH 断开而停止。
 
+如果已经在 `~/telebox-migration` 中运行过 `telebox-migrate convert
+-apply`，安装器会主动发现并询问是否导入。确认后只复制正式目录中不存在
+的配置、会话和插件资产，不覆盖当前 Go 数据；没有发现迁移结果时安装流程
+保持不变。自定义迁移目录可以通过 `TELEBOX_MIGRATION_DIR` 指定。
+
 即使使用 `curl | sh`，安装器也会从 `/dev/tty` 读取输入，不会把管道
 内容误当成验证码。重新安装时不会显示已保存的 API ID；API Hash 和
 二步验证密码输入时也不会回显。
@@ -58,7 +64,8 @@ sh install.sh --version v0.2.0 --no-login
 ```
 
 `--no-start` 会完成登录但不启动服务；`--no-login` 会同时跳过登录和
-启动。QR 登录还会把二维码图片保存到数据目录，终端会显示完整路径。
+启动。一键安装同时安装 `telebox-migrate`，方便以后检查或接管原版备份。
+QR 登录还会把二维码图片保存到数据目录，终端会显示完整路径。
 
 已经安装后也可以单独重新登录：
 

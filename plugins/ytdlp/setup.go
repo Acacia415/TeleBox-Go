@@ -340,15 +340,6 @@ func redactProxy(value string) string {
 }
 
 func (p *Plugin) migrateLegacyConfig(ctx context.Context) error {
-	if p.services.AssetsDir == "" {
-		return nil
-	}
-	values, err := legacyconfig.ReadSQLiteConfig(
-		filepath.Join(p.services.AssetsDir, "ytdlp_gemini_config.db"),
-	)
-	if err != nil {
-		return err
-	}
 	mapping := map[string]string{
 		"ytdlp_gemini_api_key":     "api_key",
 		"ytdlp_gemini_base_url":    "base_url",
@@ -358,20 +349,35 @@ func (p *Plugin) migrateLegacyConfig(ctx context.Context) error {
 		"ytdlp_gemini_top_k":       "top_k",
 	}
 	imported := 0
-	for oldKey, newKey := range mapping {
-		value := strings.TrimSpace(values[oldKey])
-		if value == "" {
-			continue
-		}
-		if _, err := p.services.Storage.Get(ctx, "yt-dlp", newKey); err == nil {
-			continue
-		} else if !errors.Is(err, storage.ErrNotFound) {
+	for _, databasePath := range legacyconfig.CandidatePaths(
+		p.services.AssetsDir,
+		p.services.LegacyAssetsDir,
+		"ytdlp_gemini_config.db",
+		"ytdlp/ytdlp_gemini_config.db",
+	) {
+		values, err := legacyconfig.ReadSQLiteConfig(databasePath)
+		if err != nil {
 			return err
 		}
-		if err := p.write(ctx, newKey, value); err != nil {
-			return err
+		for oldKey, newKey := range mapping {
+			value := strings.TrimSpace(values[oldKey])
+			if value == "" {
+				continue
+			}
+			if _, err := p.services.Storage.Get(
+				ctx,
+				"yt-dlp",
+				newKey,
+			); err == nil {
+				continue
+			} else if !errors.Is(err, storage.ErrNotFound) {
+				return err
+			}
+			if err := p.write(ctx, newKey, value); err != nil {
+				return err
+			}
+			imported++
 		}
-		imported++
 	}
 	if imported > 0 {
 		p.services.Logger.Info("migrated legacy yt-dlp config", "keys", imported)
