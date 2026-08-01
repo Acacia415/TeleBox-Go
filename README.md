@@ -143,9 +143,10 @@ cp config.example.json config.json
 主程序初次安装不携带业务插件。通过 `-p i` 下载的压缩包会经过 HTTPS、
 大小限制和 SHA-256 校验，再安装到配置的插件目录。每个插件运行在独立
 子进程中；一个插件退出不会带崩 TeleBox，下一次调用会自动重新启动它。
-Release 中的 Linux 插件 ZIP 是按需安装和独立更新所必需的，不会在安装
-主程序时自动下载。正式 Release 不再发布缺少一键安装与守护流程的 Windows
-主程序和插件包。
+Linux 插件 ZIP 通过独立插件版本按需发布，不会在安装主程序时自动下载。
+框架 Release 只包含主程序、迁移器和兼容目录快照；修复单个插件时只重新
+编译该插件的 `amd64`、`arm64` 包。正式 Release 不再发布缺少一键安装与
+守护流程的 Windows 主程序和插件包。
 
 `yt-dlp` 可以通过 `-yt setup` 自动安装并校验上游程序，通过
 `-yt doctor` 检查 Deno、FFmpeg、Cookies 和代理。音视频转换等插件仍需要
@@ -203,7 +204,7 @@ go run ./cmd/telebox-plugin-sdk build \
   -plugin bin -goos linux -goarch amd64 -output .build/bin
 ```
 
-生成整个插件发布目录和带校验值的目录文件：
+生成整个插件目录：
 
 ```bash
 go run ./cmd/telebox-plugin-sdk release \
@@ -211,6 +212,21 @@ go run ./cmd/telebox-plugin-sdk release \
   -platforms linux/amd64,linux/arm64 \
   -output dist/plugins
 ```
+
+增量构建单个插件并合并现有目录：
+
+```bash
+go run ./cmd/telebox-plugin-sdk release \
+  -plugins speedlink \
+  -base-catalog current-plugin-catalog.json \
+  -keep-releases 3 \
+  -tag plugin-speedlink-v0.4.2 \
+  -platforms linux/amd64,linux/arm64 \
+  -output dist/plugins
+```
+
+框架与插件的正式发布步骤见
+[`docs/releasing.md`](docs/releasing.md)。
 
 配置可用以下环境变量覆盖，敏感值不必写入 JSON：
 

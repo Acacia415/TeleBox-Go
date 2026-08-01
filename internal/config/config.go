@@ -13,6 +13,13 @@ import (
 	"strings"
 )
 
+const (
+	DefaultPluginCatalogURL = "https://github.com/Acacia415/TeleBox-Go/" +
+		"releases/download/plugin-registry/plugin-catalog.json"
+	legacyPluginCatalogURL = "https://github.com/Acacia415/TeleBox-Go/" +
+		"releases/latest/download/plugin-catalog.json"
+)
+
 // Config contains all process-level configuration. Plugin-specific settings
 // will be stored separately so one plugin cannot accidentally receive another
 // plugin's secrets.
@@ -102,7 +109,7 @@ func Default() Config {
 			Enabled:         []string{},
 			Disabled:        []string{},
 			Directory:       "data/plugins",
-			CatalogURL:      "https://github.com/Acacia415/TeleBox-Go/releases/latest/download/plugin-catalog.json",
+			CatalogURL:      DefaultPluginCatalogURL,
 			MaxArchiveBytes: 128 << 20,
 		},
 		Logging: LoggingConfig{
@@ -138,6 +145,9 @@ func Load(path string) (Config, error) {
 
 	if err := applyEnvironment(&cfg); err != nil {
 		return Config{}, err
+	}
+	if strings.TrimSpace(cfg.Plugins.CatalogURL) == legacyPluginCatalogURL {
+		cfg.Plugins.CatalogURL = DefaultPluginCatalogURL
 	}
 
 	baseDir, err := filepath.Abs(filepath.Dir(path))

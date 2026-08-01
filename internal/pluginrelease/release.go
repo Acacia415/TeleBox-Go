@@ -2,6 +2,7 @@ package pluginrelease
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +19,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/pluginbuilder"
 	"github.com/Acacia415/TeleBox-Go/internal/pluginspec"
 	"github.com/Acacia415/TeleBox-Go/pkg/pluginapi"
+	"golang.org/x/mod/semver"
 )
 
 type Platform struct {
@@ -31,6 +33,9 @@ type Options struct {
 	Tag           string
 	RepositoryURL string
 	Platforms     []Platform
+	PluginNames   []string
+	BaseCatalog   string
+	KeepReleases  int
 	GoBinary      string
 	MinimumHost   string
 }
@@ -70,11 +75,16 @@ func Generate(ctx context.Context, options Options) (Result, error) {
 	}
 	defer os.RemoveAll(staging)
 
-	catalog := pluginapi.Catalog{
-		SchemaVersion: pluginapi.CatalogSchemaVersion,
+	catalog, err := loadBaseCatalog(options.BaseCatalog)
+	if err != nil {
+		return Result{}, err
+	}
+	specifications, err := selectedSpecifications(options.PluginNames)
+	if err != nil {
+		return Result{}, err
 	}
 	var artifactPaths []string
-	for _, specification := range pluginspec.All() {
+	for _, specification := range specifications {
 		catalogItem := pluginapi.CatalogPlugin{
 			Name:     specification.Name,
 			Homepage: repositoryURL,
@@ -148,8 +158,11 @@ func Generate(ctx context.Context, options Options) (Result, error) {
 			return release.Artifacts[i].OS < release.Artifacts[j].OS
 		})
 		catalogItem.Releases = []pluginapi.PluginRelease{release}
-		catalog.Plugins = append(catalog.Plugins, catalogItem)
+		mergeCatalogPlugin(&catalog, catalogItem, options.KeepReleases)
 	}
+	sort.Slice(catalog.Plugins, func(i, j int) bool {
+		return catalog.Plugins[i].Name < catalog.Plugins[j].Name
+	})
 	if err := catalog.Validate(); err != nil {
 		return Result{}, fmt.Errorf("generated catalog is invalid: %w", err)
 	}
@@ -166,6 +179,146 @@ func Generate(ctx context.Context, options Options) (Result, error) {
 		CatalogPath: catalogPath,
 		Artifacts:   artifactPaths,
 	}, nil
+}
+
+func ParsePluginNames(value string) []string {
+	var result []string
+	seen := make(map[string]struct{})
+	for _, item := range strings.Split(value, ",") {
+		name := strings.ToLower(strings.TrimSpace(item))
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	return result
+}
+
+func selectedSpecifications(names []string) ([]pluginspec.Spec, error) {
+	if len(names) == 0 {
+		return pluginspec.All(), nil
+	}
+	result := make([]pluginspec.Spec, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, rawName := range names {
+		name := strings.ToLower(strings.TrimSpace(rawName))
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		specification, exists := pluginspec.Find(name)
+		if !exists {
+			return nil, fmt.Errorf("unknown plugin %q", name)
+		}
+		seen[name] = struct{}{}
+		result = append(result, specification)
+	}
+	if len(result) == 0 {
+		return nil, errors.New("no plugins were selected")
+	}
+	return result, nil
+}
+
+func loadBaseCatalog(path string) (pluginapi.Catalog, error) {
+	catalog := pluginapi.Catalog{
+		SchemaVersion: pluginapi.CatalogSchemaVersion,
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return catalog, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return pluginapi.Catalog{}, fmt.Errorf("read base catalog: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&catalog); err != nil {
+		return pluginapi.Catalog{}, fmt.Errorf("decode base catalog: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return pluginapi.Catalog{}, errors.New(
+				"decode base catalog: trailing JSON value",
+			)
+		}
+		return pluginapi.Catalog{}, fmt.Errorf(
+			"decode base catalog: %w",
+			err,
+		)
+	}
+	if err := catalog.Validate(); err != nil {
+		return pluginapi.Catalog{}, fmt.Errorf("validate base catalog: %w", err)
+	}
+	return catalog, nil
+}
+
+func mergeCatalogPlugin(
+	catalog *pluginapi.Catalog,
+	updated pluginapi.CatalogPlugin,
+	keepReleases int,
+) {
+	for index := range catalog.Plugins {
+		if catalog.Plugins[index].Name != updated.Name {
+			continue
+		}
+		updated.Releases = mergeReleases(
+			updated.Releases,
+			catalog.Plugins[index].Releases,
+			keepReleases,
+		)
+		catalog.Plugins[index] = updated
+		return
+	}
+	updated.Releases = mergeReleases(updated.Releases, nil, keepReleases)
+	catalog.Plugins = append(catalog.Plugins, updated)
+}
+
+func mergeReleases(
+	preferred []pluginapi.PluginRelease,
+	existing []pluginapi.PluginRelease,
+	keep int,
+) []pluginapi.PluginRelease {
+	byVersion := make(map[string]pluginapi.PluginRelease)
+	for _, release := range existing {
+		byVersion[normalizedVersion(release.Version)] = release
+	}
+	for _, release := range preferred {
+		byVersion[normalizedVersion(release.Version)] = release
+	}
+	result := make([]pluginapi.PluginRelease, 0, len(byVersion))
+	for _, release := range byVersion {
+		result = append(result, release)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		comparison := semver.Compare(
+			normalizedVersion(result[i].Version),
+			normalizedVersion(result[j].Version),
+		)
+		if comparison == 0 {
+			return result[i].Version > result[j].Version
+		}
+		return comparison > 0
+	})
+	if keep > 0 && len(result) > keep {
+		result = result[:keep]
+	}
+	return result
+}
+
+func normalizedVersion(value string) string {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "v") {
+		value = "v" + value
+	}
+	return value
 }
 
 func ParsePlatforms(value string) ([]Platform, error) {

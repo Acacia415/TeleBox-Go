@@ -1,0 +1,183 @@
+name: plugin-release
+
+on:
+  push:
+    tags:
+      - "plugin-*-v*"
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: "Canonical plugin name, for example speedlink or yt-dlp"
+        required: true
+        type: string
+      version:
+        description: "Plugin version from Metadata(), for example 0.4.2"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plugin-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Resolve plugin release
+        id: release
+        env:
+          INPUT_PLUGIN: ${{ inputs.plugin }}
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            plugin="${INPUT_PLUGIN}"
+            version="${INPUT_VERSION}"
+            version="${version#v}"
+            tag="plugin-${plugin}-v${version}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            payload="${tag#plugin-}"
+            if [[ "${payload}" != *-v* ]]; then
+              echo "invalid plugin tag: ${tag}" >&2
+              exit 1
+            fi
+            plugin="${payload%-v*}"
+            version="${payload##*-v}"
+          fi
+          if [[ ! "${plugin}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+            echo "invalid plugin name: ${plugin}" >&2
+            exit 1
+          fi
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid plugin version: ${version}" >&2
+            exit 1
+          fi
+          if ! go run ./cmd/telebox-plugin-sdk list | grep -Fxq "${plugin}"; then
+            echo "unknown official plugin: ${plugin}" >&2
+            exit 1
+          fi
+          echo "plugin=${plugin}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Test
+        run: go test ./...
+
+      - name: Download current plugin catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/base
+          if ! gh release download plugin-registry \
+            --pattern plugin-catalog.json \
+            --dir dist/base; then
+            echo "plugin-registry is missing; using the latest stable catalog"
+            gh release download \
+              --pattern plugin-catalog.json \
+              --dir dist/base
+          fi
+
+      - name: Build selected plugin packages
+        env:
+          PLUGIN: ${{ steps.release.outputs.plugin }}
+          VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/telebox-plugin-sdk release \
+            -plugins "${PLUGIN}" \
+            -base-catalog dist/base/plugin-catalog.json \
+            -keep-releases 3 \
+            -tag "${RELEASE_TAG}" \
+            -platforms "linux/amd64,linux/arm64" \
+            -min-host "0.5.0" \
+            -output dist/plugins
+          mv dist/plugins/catalog.json dist/plugin-catalog.json
+          actual_version="$(jq -r \
+            --arg plugin "${PLUGIN}" \
+            '.plugins[] | select(.name == $plugin) | .releases[0].version' \
+            dist/plugin-catalog.json)"
+          if [[ "${actual_version#v}" != "${VERSION}" ]]; then
+            echo "tag version ${VERSION} does not match plugin metadata ${actual_version}" >&2
+            exit 1
+          fi
+          mkdir -p dist/plugin-release
+          (
+            cd dist/plugins
+            sha256sum *.zip > ../plugin-release/SHA256SUMS.txt
+          )
+
+      - name: Publish plugin release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLUGIN: ${{ steps.release.outputs.plugin }}
+          VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" \
+              dist/plugins/*.zip \
+              dist/plugin-release/SHA256SUMS.txt \
+              --clobber
+          else
+            create_args=(
+              "${RELEASE_TAG}"
+              dist/plugins/*.zip
+              dist/plugin-release/SHA256SUMS.txt
+              --prerelease
+              --title "${PLUGIN} ${VERSION}"
+              --notes "TeleBox-Go official plugin package for Linux amd64 and arm64."
+            )
+            if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+              create_args+=(--verify-tag)
+            else
+              create_args+=(--target "${GITHUB_SHA}")
+            fi
+            gh release create "${create_args[@]}"
+          fi
+
+      - name: Update plugin registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/registry
+          cp dist/plugin-catalog.json dist/registry/plugin-catalog.json
+          (
+            cd dist/registry
+            sha256sum plugin-catalog.json > plugin-catalog.sha256
+          )
+          if gh release view plugin-registry >/dev/null 2>&1; then
+            gh release upload plugin-registry \
+              dist/registry/plugin-catalog.json \
+              dist/registry/plugin-catalog.sha256 \
+              --clobber
+          else
+            gh release create plugin-registry \
+              dist/registry/plugin-catalog.json \
+              dist/registry/plugin-catalog.sha256 \
+              --target "${GITHUB_SHA}" \
+              --prerelease \
+              --title "TeleBox-Go Plugin Registry" \
+              --notes "Mutable official plugin catalog. Plugin packages are published as independent pre-releases."
+          fi

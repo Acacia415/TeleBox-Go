@@ -22,10 +22,16 @@ plugin.json
 telebox-plugin-<name>
 ```
 
-`plugin.json` 记录 API 版本、命令、架构、权限和可执行文件。`tpm` 从同一
-GitHub Release 下载目录和压缩包，依次验证 HTTPS、文件大小、SHA-256、
+`plugin.json` 记录 API 版本、命令、架构、权限和可执行文件。框架正式版与
+插件版本使用同一仓库中的两条发布通道：`v*` Release 只发布框架，
+`plugin-<name>-v*` Pre-release 只发布对应插件。`tpm` 从固定的
+`plugin-registry` 目录下载指定压缩包，依次验证 HTTPS、文件大小、SHA-256、
 归档路径和 manifest，再原子替换安装目录。目录中的 `min_host` 会在下载前
 与当前框架版本比较，依赖新增框架能力的插件不会被旧主程序误装。
+
+插件目录保留每个插件最近三个版本，支持指定版本安装和回退。框架 Release
+仍携带发布时的目录快照，供旧版 `releases/latest` 配置兼容使用，但新版本
+直接读取固定目录，因此插件更新不要求同步发布框架。
 
 运行时通过 stdin/stdout 上的双向 JSON RPC 连接插件子进程。插件看到的是
 稳定的 `service.Container` 代理，不直接接触 gotd 的 TL 类型。大文件通过

@@ -36,6 +36,36 @@ func TestLoadAppliesDefaultsAndResolvesPaths(t *testing.T) {
 	if want := filepath.Join(dir, "data", "legacy-assets"); cfg.Storage.LegacyAssetsPath != want {
 		t.Fatalf("Storage.LegacyAssetsPath = %q, want %q", cfg.Storage.LegacyAssetsPath, want)
 	}
+	if cfg.Plugins.CatalogURL != DefaultPluginCatalogURL {
+		t.Fatalf("Plugins.CatalogURL = %q", cfg.Plugins.CatalogURL)
+	}
+}
+
+func TestLoadMigratesLegacyPluginCatalogURL(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := `{
+		"telegram": {"api_id": 1, "api_hash": "hash", "session_file": "session.json"},
+		"commands": {"prefixes": ["-"], "owner_ids": []},
+		"storage": {"path": "telebox.db"},
+		"plugins": {
+			"enabled": [],
+			"disabled": [],
+			"catalog_url": "https://github.com/Acacia415/TeleBox-Go/releases/latest/download/plugin-catalog.json"
+		},
+		"logging": {"level": "info", "format": "text"}
+	}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Plugins.CatalogURL != DefaultPluginCatalogURL {
+		t.Fatalf("Plugins.CatalogURL = %q", cfg.Plugins.CatalogURL)
+	}
 }
 
 func TestLoadRejectsUnknownFields(t *testing.T) {
