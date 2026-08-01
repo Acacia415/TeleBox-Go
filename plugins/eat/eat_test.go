@@ -156,6 +156,11 @@ func TestFitWithin(t *testing.T) {
 func TestTrimTransparentStickerCanvas(t *testing.T) {
 	t.Parallel()
 	source := image.NewNRGBA(image.Rect(0, 0, 6, 5))
+	for y := 0; y < 5; y++ {
+		for x := 0; x < 6; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{R: 255, A: stickerTrimAlpha - 1})
+		}
+	}
 	for y := 1; y < 4; y++ {
 		for x := 2; x < 5; x++ {
 			source.SetNRGBA(x, y, color.NRGBA{R: 200, G: 100, A: 255})
