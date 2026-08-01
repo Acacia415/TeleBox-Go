@@ -1,6 +1,7 @@
 package eat
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"image"
@@ -172,6 +173,83 @@ func TestTrimTransparentStickerCanvas(t *testing.T) {
 	}
 	if pixel := color.NRGBAModel.Convert(got.At(0, 0)).(color.NRGBA); pixel.R != 200 || pixel.G != 100 || pixel.A != 255 {
 		t.Fatalf("trimmed first pixel = %+v", pixel)
+	}
+}
+
+func TestSignificantAlphaBoundsReportsThresholds(t *testing.T) {
+	t.Parallel()
+	source := image.NewNRGBA(image.Rect(0, 0, 5, 4))
+	source.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 4})
+	source.SetNRGBA(2, 1, color.NRGBA{G: 255, A: 32})
+	source.SetNRGBA(3, 2, color.NRGBA{B: 255, A: 255})
+
+	low, lowPixels := significantAlphaBounds(source, 1)
+	if low != image.Rect(0, 0, 4, 3) || lowPixels != 3 {
+		t.Fatalf("low alpha bounds = %v, pixels = %d", low, lowPixels)
+	}
+	high, highPixels := significantAlphaBounds(source, 64)
+	if high != image.Rect(3, 2, 4, 3) || highPixels != 1 {
+		t.Fatalf("high alpha bounds = %v, pixels = %d", high, highPixels)
+	}
+}
+
+func TestTrimStickerContentSelectsDominantComponent(t *testing.T) {
+	t.Parallel()
+	source := image.NewNRGBA(image.Rect(0, 0, 12, 6))
+	for y := 1; y < 3; y++ {
+		for x := 0; x < 2; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{R: 255, A: 255})
+		}
+	}
+	for y := 0; y < 5; y++ {
+		for x := 7; x < 12; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{B: 255, A: 255})
+		}
+	}
+	got := trimStickerContent(source)
+	if got.Bounds() != image.Rect(0, 0, 5, 5) {
+		t.Fatalf("dominant crop bounds = %v", got.Bounds())
+	}
+	if pixel := color.NRGBAModel.Convert(got.At(0, 0)).(color.NRGBA); pixel.B != 255 {
+		t.Fatalf("dominant crop first pixel = %+v", pixel)
+	}
+}
+
+func TestTrimStickerContentKeepsBalancedComponents(t *testing.T) {
+	t.Parallel()
+	source := image.NewNRGBA(image.Rect(0, 0, 8, 3))
+	for y := 0; y < 3; y++ {
+		for x := 0; x < 3; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{R: 255, A: 255})
+		}
+		for x := 5; x < 8; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{G: 255, A: 255})
+		}
+	}
+	got := trimStickerContent(source)
+	if got.Bounds() != image.Rect(0, 0, 8, 3) {
+		t.Fatalf("balanced crop bounds = %v", got.Bounds())
+	}
+}
+
+func TestWriteDiagnosticArchive(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/eat2-diagnostic.zip"
+	err := writeDiagnosticArchive(path, map[string][]byte{
+		"00-report.txt":    []byte("report"),
+		"full-decoded.png": []byte("png"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	if len(archive.File) != 2 || archive.File[0].Name != "00-report.txt" ||
+		archive.File[1].Name != "full-decoded.png" {
+		t.Fatalf("archive entries = %#v", archive.File)
 	}
 }
 

@@ -1,6 +1,7 @@
 package eat
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"image/draw"
 	_ "image/gif"
 	"image/jpeg"
+	"image/png"
 	"io"
 	"math"
 	"math/rand/v2"
@@ -33,11 +35,13 @@ import (
 )
 
 const (
-	defaultConfigURL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/refs/heads/main/eat/config.json"
-	maxImageBytes    = 8 << 20
-	stickerFileName  = "output.webp"
-	stickerMIMEType  = "image/webp"
-	stickerTrimAlpha = 8
+	defaultConfigURL  = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/refs/heads/main/eat/config.json"
+	maxImageBytes     = 8 << 20
+	stickerFileName   = "output.webp"
+	stickerMIMEType   = "image/webp"
+	stickerTrimAlpha  = 8
+	dominantAlphaRate = 0.75
+	diagnosticName    = "eat2-diagnostic.zip"
 )
 
 type role struct {
@@ -100,7 +104,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.3.5",
+		Version:     "0.3.7",
 		Description: "使用头像或回复图片制作静态表情",
 	}
 }
@@ -126,6 +130,7 @@ func (p *Plugin) Commands() []command.Definition {
 			Description: "把回复消息中的图片套入表情模板",
 			Usage: []string{
 				"eat2 [模板名]（回复图片）",
+				"eat2 debug <模板名>（回复图片）",
 				"eat2 set [配置地址]",
 				"eat2 clear",
 			},
@@ -171,6 +176,18 @@ func (p *Plugin) handle(
 	if err := p.ensureConfig(ctx); err != nil {
 		return p.respond(ctx, request, "❌ 加载表情配置失败："+err.Error())
 	}
+	if useMedia && len(request.Args) > 0 && strings.EqualFold(request.Args[0], "debug") {
+		if request.Message.ReplyToID == 0 || len(request.Args) < 2 {
+			return p.respond(ctx, request,
+				"❌ 请回复图片或贴纸后使用 "+request.Prefix+"eat2 debug <模板名>")
+		}
+		key := strings.ToLower(strings.TrimSpace(request.Args[1]))
+		selected, ok := p.cfg.Entries[key]
+		if !ok {
+			return p.respond(ctx, request, "❌ 找不到表情 "+key)
+		}
+		return p.diagnose(ctx, request, key, selected)
+	}
 	if request.Message.ReplyToID == 0 {
 		return p.respond(ctx, request, p.listText(request.Prefix))
 	}
@@ -188,6 +205,278 @@ func (p *Plugin) handle(
 			"❌ 找不到表情 "+key+"\n\n"+p.listText(request.Prefix))
 	}
 	return p.generate(ctx, request, selected, useMedia)
+}
+
+type diagnosticSource struct {
+	Label string
+	Media telegram.Media
+	Data  []byte
+	Err   error
+}
+
+func (p *Plugin) diagnose(
+	ctx context.Context,
+	request command.Request,
+	key string,
+	selected entry,
+) error {
+	if err := p.respond(ctx, request, "⏳ 正在生成 eat2 诊断包…"); err != nil {
+		return err
+	}
+	messages, err := p.services.Telegram.GetMessages(
+		ctx, request.Message.ChatID, []int{request.Message.ReplyToID},
+	)
+	if err != nil || len(messages) == 0 {
+		return p.respond(ctx, request, "❌ 无法读取回复消息")
+	}
+	replied := messages[0]
+	if replied.Media == nil {
+		return p.respond(ctx, request, "❌ 回复消息不包含图片或贴纸")
+	}
+
+	full := diagnosticSource{Label: "full"}
+	var fullData bytes.Buffer
+	full.Media, full.Err = p.services.Telegram.DownloadMedia(
+		ctx,
+		request.Message.ChatID,
+		replied.ID,
+		&boundedWriter{Writer: &fullData, Remaining: maxImageBytes},
+	)
+	full.Data = append([]byte(nil), fullData.Bytes()...)
+
+	preview := diagnosticSource{Label: "preview"}
+	var previewData bytes.Buffer
+	preview.Media, preview.Err = p.services.Telegram.DownloadMediaPreview(
+		ctx,
+		request.Message.ChatID,
+		replied.ID,
+		&boundedWriter{Writer: &previewData, Remaining: maxImageBytes},
+	)
+	preview.Data = append([]byte(nil), previewData.Bytes()...)
+
+	if full.Err != nil && preview.Err != nil {
+		return p.respond(ctx, request,
+			"❌ 完整媒体和预览图均下载失败，请查看服务日志")
+	}
+
+	files := make(map[string][]byte)
+	var report strings.Builder
+	fmt.Fprintf(&report, "eat plugin: 0.3.7\n")
+	fmt.Fprintf(&report, "template: %s (%s)\n", key, selected.Name)
+	fmt.Fprintf(&report, "message media: kind=%s mime=%s size=%d declared=%dx%d\n",
+		replied.Media.Kind,
+		replied.Media.MIMEType,
+		replied.Media.Size,
+		replied.Media.Width,
+		replied.Media.Height,
+	)
+	if selected.You != nil {
+		fmt.Fprintf(&report, "you role: x=%d y=%d mask=%s rotate=%.2f flip=%t brightness=%.2f\n",
+			selected.You.X,
+			selected.You.Y,
+			selected.You.Mask,
+			selected.You.Rotate,
+			selected.You.Flip,
+			selected.You.Brightness,
+		)
+	} else {
+		report.WriteString("you role: not configured\n")
+	}
+	report.WriteString("\n")
+
+	for _, source := range []diagnosticSource{full, preview} {
+		if err := p.addDiagnosticSource(ctx, &report, files, source, selected); err != nil {
+			fmt.Fprintf(&report, "%s processing error: %v\n\n", source.Label, err)
+		}
+	}
+	files["00-report.txt"] = []byte(report.String())
+
+	jobDir, err := os.MkdirTemp(p.workDir, "diagnostic-*")
+	if err != nil {
+		return p.respond(ctx, request, "❌ 创建诊断目录失败："+err.Error())
+	}
+	defer os.RemoveAll(jobDir)
+	archivePath := filepath.Join(jobDir, diagnosticName)
+	if err := writeDiagnosticArchive(archivePath, files); err != nil {
+		return p.respond(ctx, request, "❌ 生成诊断包失败："+err.Error())
+	}
+	_, err = p.services.Telegram.SendFile(ctx, request.Message.ChatID, telegram.Upload{
+		Path:      archivePath,
+		FileName:  diagnosticName,
+		MIMEType:  "application/zip",
+		ReplyToID: request.Message.ReplyToID,
+		Kind:      telegram.MediaDocument,
+		Caption:   "eat2 诊断包：" + key,
+	})
+	if err != nil {
+		return p.respond(ctx, request, "❌ 发送诊断包失败："+err.Error())
+	}
+	if p.services.Logger != nil {
+		p.services.Logger.Info(
+			"eat2 diagnostic created",
+			"template", key,
+			"message_kind", replied.Media.Kind,
+			"full_error", full.Err,
+			"preview_error", preview.Err,
+		)
+	}
+	return p.respond(ctx, request,
+		"✅ eat2 诊断包已发送，请保留 ZIP 文件用于分析")
+}
+
+func (p *Plugin) addDiagnosticSource(
+	ctx context.Context,
+	report *strings.Builder,
+	files map[string][]byte,
+	source diagnosticSource,
+	selected entry,
+) error {
+	fmt.Fprintf(report, "[%s]\n", source.Label)
+	if source.Err != nil {
+		fmt.Fprintf(report, "download error: %v\n\n", source.Err)
+		return nil
+	}
+	fmt.Fprintf(report, "metadata: kind=%s mime=%s bytes=%d declared=%dx%d\n",
+		source.Media.Kind,
+		source.Media.MIMEType,
+		len(source.Data),
+		source.Media.Width,
+		source.Media.Height,
+	)
+	decoded, format, err := image.Decode(bytes.NewReader(source.Data))
+	if err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+	fmt.Fprintf(report, "decoded: format=%s bounds=%s\n", format, rectangleText(decoded.Bounds()))
+	files[source.Label+"-original."+diagnosticExtension(format)] = source.Data
+	normalized, err := encodeDiagnosticPNG(decoded)
+	if err != nil {
+		return err
+	}
+	files[source.Label+"-decoded.png"] = normalized
+
+	for _, threshold := range []uint8{1, 8, 32, 64, 128} {
+		bounds, pixels := significantAlphaBounds(decoded, threshold)
+		fmt.Fprintf(report, "alpha >= %d: bounds=%s pixels=%d\n",
+			threshold, rectangleText(bounds), pixels)
+	}
+	globalTrimmed := trimTransparentAt(decoded, stickerTrimAlpha)
+	globalTrimmedPNG, err := encodeDiagnosticPNG(globalTrimmed)
+	if err != nil {
+		return err
+	}
+	files[source.Label+"-trimmed-alpha8.png"] = globalTrimmedPNG
+	dominantBounds, dominantPixels, totalPixels := dominantAlphaComponentBounds(
+		decoded,
+		stickerTrimAlpha,
+	)
+	dominantRate := 0.0
+	if totalPixels > 0 {
+		dominantRate = float64(dominantPixels) / float64(totalPixels)
+	}
+	fmt.Fprintf(report, "dominant component: bounds=%s pixels=%d/%d rate=%.4f selected=%t\n",
+		rectangleText(dominantBounds),
+		dominantPixels,
+		totalPixels,
+		dominantRate,
+		dominantRate >= dominantAlphaRate,
+	)
+	trimmed := trimStickerContent(decoded)
+	selectedPNG, err := encodeDiagnosticPNG(trimmed)
+	if err != nil {
+		return err
+	}
+	files[source.Label+"-selected.png"] = selectedPNG
+	fmt.Fprintf(report, "selected image: bounds=%s\n", rectangleText(trimmed.Bounds()))
+
+	if selected.You != nil {
+		maskBytes, err := p.asset(ctx, selected.You.Mask)
+		if err != nil {
+			return fmt.Errorf("load mask: %w", err)
+		}
+		mask, _, err := image.Decode(bytes.NewReader(maskBytes))
+		if err != nil {
+			return fmt.Errorf("decode mask: %w", err)
+		}
+		fitted := resizeCover(trimmed, mask.Bounds().Dx(), mask.Bounds().Dy())
+		fittedPNG, err := encodeDiagnosticPNG(fitted)
+		if err != nil {
+			return err
+		}
+		files[source.Label+"-fitted.png"] = fittedPNG
+		maskedPNG, err := encodeDiagnosticPNG(maskImage(fitted, mask))
+		if err != nil {
+			return err
+		}
+		files[source.Label+"-masked.png"] = maskedPNG
+		fmt.Fprintf(report, "mask: %s\n", rectangleText(mask.Bounds()))
+	}
+	report.WriteString("\n")
+	return nil
+}
+
+func writeDiagnosticArchive(path string, files map[string][]byte) error {
+	output, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	archive := zip.NewWriter(output)
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		entry, createErr := archive.CreateHeader(&zip.FileHeader{
+			Name:   name,
+			Method: zip.Deflate,
+		})
+		if createErr != nil {
+			_ = archive.Close()
+			_ = output.Close()
+			return createErr
+		}
+		if _, writeErr := entry.Write(files[name]); writeErr != nil {
+			_ = archive.Close()
+			_ = output.Close()
+			return writeErr
+		}
+	}
+	if err := archive.Close(); err != nil {
+		_ = output.Close()
+		return err
+	}
+	return output.Close()
+}
+
+func encodeDiagnosticPNG(source image.Image) ([]byte, error) {
+	var output bytes.Buffer
+	if err := png.Encode(&output, source); err != nil {
+		return nil, fmt.Errorf("encode PNG: %w", err)
+	}
+	return output.Bytes(), nil
+}
+
+func diagnosticExtension(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "jpeg":
+		return "jpg"
+	case "png", "gif", "webp":
+		return strings.ToLower(strings.TrimSpace(format))
+	default:
+		return "bin"
+	}
+}
+
+func rectangleText(bounds image.Rectangle) string {
+	return fmt.Sprintf("(%d,%d)-(%d,%d) %dx%d",
+		bounds.Min.X,
+		bounds.Min.Y,
+		bounds.Max.X,
+		bounds.Max.Y,
+		bounds.Dx(),
+		bounds.Dy(),
+	)
 }
 
 func (p *Plugin) refresh(
@@ -484,7 +773,7 @@ func (p *Plugin) youImage(
 		return nil, err
 	}
 	if replied.Media.Kind == telegram.MediaSticker {
-		decoded = trimTransparent(decoded)
+		decoded = trimStickerContent(decoded)
 	}
 	return decoded, nil
 }
@@ -707,31 +996,146 @@ func resize(source image.Image, width, height int) *image.NRGBA {
 }
 
 func trimTransparent(source image.Image) image.Image {
+	return trimTransparentAt(source, stickerTrimAlpha)
+}
+
+func trimStickerContent(source image.Image) image.Image {
+	globalBounds, _ := significantAlphaBounds(source, stickerTrimAlpha)
+	if globalBounds.Empty() {
+		return source
+	}
+	selected := globalBounds
+	dominantBounds, dominantPixels, totalPixels := dominantAlphaComponentBounds(
+		source,
+		stickerTrimAlpha,
+	)
+	if totalPixels > 0 &&
+		float64(dominantPixels)/float64(totalPixels) >= dominantAlphaRate {
+		selected = dominantBounds
+	}
+	return cropToBounds(source, selected)
+}
+
+func trimTransparentAt(source image.Image, threshold uint8) image.Image {
+	bounds, _ := significantAlphaBounds(source, threshold)
+	if bounds.Empty() || bounds == source.Bounds() {
+		return source
+	}
+	return cropToBounds(source, bounds)
+}
+
+func cropToBounds(source image.Image, bounds image.Rectangle) image.Image {
+	if bounds.Empty() || bounds == source.Bounds() {
+		return source
+	}
+	result := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	draw.Draw(result, result.Bounds(), source, bounds.Min, draw.Src)
+	return result
+}
+
+func dominantAlphaComponentBounds(
+	source image.Image,
+	threshold uint8,
+) (image.Rectangle, int, int) {
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return image.Rectangle{}, 0, 0
+	}
+	opaque := make([]bool, width*height)
+	total := 0
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			index := y*width + x
+			alpha := color.NRGBAModel.Convert(
+				source.At(bounds.Min.X+x, bounds.Min.Y+y),
+			).(color.NRGBA).A
+			if alpha >= threshold {
+				opaque[index] = true
+				total++
+			}
+		}
+	}
+	if total == 0 {
+		return image.Rectangle{}, 0, 0
+	}
+
+	visited := make([]bool, len(opaque))
+	queue := make([]int, 0, total)
+	largestBounds := image.Rectangle{}
+	largestPixels := 0
+	for start, present := range opaque {
+		if !present || visited[start] {
+			continue
+		}
+		queue = queue[:0]
+		queue = append(queue, start)
+		visited[start] = true
+		componentPixels := 0
+		minX, minY := width, height
+		maxX, maxY := 0, 0
+		for head := 0; head < len(queue); head++ {
+			index := queue[head]
+			x, y := index%width, index/width
+			componentPixels++
+			minX = min(minX, x)
+			minY = min(minY, y)
+			maxX = max(maxX, x+1)
+			maxY = max(maxY, y+1)
+			for offsetY := -1; offsetY <= 1; offsetY++ {
+				for offsetX := -1; offsetX <= 1; offsetX++ {
+					if offsetX == 0 && offsetY == 0 {
+						continue
+					}
+					nextX, nextY := x+offsetX, y+offsetY
+					if nextX < 0 || nextX >= width || nextY < 0 || nextY >= height {
+						continue
+					}
+					next := nextY*width + nextX
+					if opaque[next] && !visited[next] {
+						visited[next] = true
+						queue = append(queue, next)
+					}
+				}
+			}
+		}
+		if componentPixels > largestPixels {
+			largestPixels = componentPixels
+			largestBounds = image.Rect(
+				bounds.Min.X+minX,
+				bounds.Min.Y+minY,
+				bounds.Min.X+maxX,
+				bounds.Min.Y+maxY,
+			)
+		}
+	}
+	return largestBounds, largestPixels, total
+}
+
+func significantAlphaBounds(source image.Image, threshold uint8) (image.Rectangle, int) {
 	bounds := source.Bounds()
 	minX, minY := bounds.Max.X, bounds.Max.Y
 	maxX, maxY := bounds.Min.X, bounds.Min.Y
+	pixels := 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			// Some WebP stickers retain nearly invisible alpha across the full
 			// canvas. Ignore that encoding noise so the visible artwork can be
 			// centered inside the template mask.
-			if color.NRGBAModel.Convert(source.At(x, y)).(color.NRGBA).A < stickerTrimAlpha {
+			if color.NRGBAModel.Convert(source.At(x, y)).(color.NRGBA).A < threshold {
 				continue
 			}
+			pixels++
 			minX = min(minX, x)
 			minY = min(minY, y)
 			maxX = max(maxX, x+1)
 			maxY = max(maxY, y+1)
 		}
 	}
-	if minX >= maxX || minY >= maxY ||
-		(minX == bounds.Min.X && minY == bounds.Min.Y &&
-			maxX == bounds.Max.X && maxY == bounds.Max.Y) {
-		return source
+	if minX >= maxX || minY >= maxY {
+		return image.Rectangle{}, 0
 	}
-	result := image.NewNRGBA(image.Rect(0, 0, maxX-minX, maxY-minY))
-	draw.Draw(result, result.Bounds(), source, image.Pt(minX, minY), draw.Src)
-	return result
+	return image.Rect(minX, minY, maxX, maxY), pixels
 }
 
 func resizeCover(source image.Image, width, height int) *image.NRGBA {
@@ -923,6 +1327,7 @@ const eatGuideHTML = `<b>静态表情</b>
 <code>{{prefix}}eat2</code>  查看模板列表
 回复图片后发送 <code>{{prefix}}eat2 &lt;模板名&gt;</code>
 模板名留空时随机选择
+位置或裁剪异常时，回复原图发送 <code>{{prefix}}eat2 debug &lt;模板名&gt;</code> 获取一次性诊断包
 
 <b>模板配置</b>
 <code>{{prefix}}eat set [配置地址]</code>  更新模板配置
