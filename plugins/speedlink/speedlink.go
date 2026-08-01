@@ -122,7 +122,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "speedlink",
-		Version:     "0.4.0",
+		Version:     "0.4.1",
 		Description: "通过 SSH 在本机或多台远程服务器运行 Ookla Speedtest",
 	}
 }
@@ -1206,23 +1206,59 @@ func (p *Plugin) sendSpeedResult(
 	caption := formatSpeedResultHTML(
 		label, local, value, asInfo, countryFlag, duration,
 	)
-	imagePath, cleanup := p.saveSpeedtestImage(ctx, value.Result.URL)
-	if cleanup != nil {
-		defer cleanup()
+	images := p.saveSpeedtestImage(ctx, value.Result.URL)
+	if images.cleanup != nil {
+		defer images.cleanup()
 	}
-	if imagePath != "" {
-		_, err := p.services.Telegram.SendFile(ctx, chatID, telegram.Upload{
-			Path:        imagePath,
+	var mediaErr error
+	tried := make(map[string]struct{}, 2)
+	for _, imagePath := range []string{images.processed, images.original} {
+		if imagePath == "" {
+			continue
+		}
+		cleaned := filepath.Clean(imagePath)
+		if _, duplicate := tried[cleaned]; duplicate {
+			continue
+		}
+		tried[cleaned] = struct{}{}
+		if _, err := p.services.Telegram.SendFile(ctx, chatID, telegram.Upload{
+			Path:        cleaned,
 			FileName:    "speedtest.png",
 			MIMEType:    "image/png",
 			Caption:     caption,
 			CaptionHTML: true,
 			Kind:        telegram.MediaPhoto,
-		})
-		return err
+		}); err == nil {
+			return nil
+		} else {
+			mediaErr = errors.Join(mediaErr, err)
+			if p.services.Logger != nil {
+				p.services.Logger.Warn(
+					"send speedtest photo; trying fallback",
+					"path", filepath.Base(cleaned),
+					"error", err,
+				)
+			}
+		}
 	}
-	_, err := telegram.SendHTML(ctx, p.services.Telegram, chatID, caption)
-	return err
+	if images.original != "" {
+		if _, err := p.services.Telegram.SendFile(ctx, chatID, telegram.Upload{
+			Path:        images.original,
+			FileName:    "speedtest.png",
+			MIMEType:    "image/png",
+			Caption:     caption,
+			CaptionHTML: true,
+			Kind:        telegram.MediaDocument,
+		}); err == nil {
+			return nil
+		} else {
+			mediaErr = errors.Join(mediaErr, err)
+		}
+	}
+	if _, err := telegram.SendHTML(ctx, p.services.Telegram, chatID, caption); err != nil {
+		return errors.Join(mediaErr, err)
+	}
+	return nil
 }
 
 func formatSpeedResultHTML(
@@ -1317,35 +1353,49 @@ func (p *Plugin) lookupIPDetails(ctx context.Context, ip string) (string, string
 	})
 }
 
+type speedtestImages struct {
+	processed string
+	original  string
+	cleanup   func()
+}
+
 func (p *Plugin) saveSpeedtestImage(
 	ctx context.Context,
 	resultURL string,
-) (string, func()) {
+) speedtestImages {
 	if strings.TrimSpace(resultURL) == "" {
-		return "", nil
+		return speedtestImages{}
 	}
 	response, err := p.services.HTTP.Do(ctx, httpclient.Request{
 		URL:     strings.TrimSpace(resultURL) + ".png",
 		Timeout: 30 * time.Second,
 	})
 	if err != nil || response.StatusCode != http.StatusOK || len(response.Body) == 0 {
-		return "", nil
+		return speedtestImages{}
 	}
 	directory, err := os.MkdirTemp(p.workDir, "result-*")
 	if err != nil {
-		return "", nil
+		return speedtestImages{}
 	}
 	cleanup := func() { _ = os.RemoveAll(directory) }
 	rawPath := filepath.Join(directory, "speedtest.png")
 	if err := os.WriteFile(rawPath, response.Body, 0o600); err != nil {
 		cleanup()
-		return "", nil
+		return speedtestImages{}
 	}
 	filledPath := filepath.Join(directory, "speedtest_filled.png")
 	if err := fillSpeedtestBorder(rawPath, filledPath, 14); err != nil {
-		return rawPath, cleanup
+		return speedtestImages{
+			processed: rawPath,
+			original:  rawPath,
+			cleanup:   cleanup,
+		}
 	}
-	return filledPath, cleanup
+	return speedtestImages{
+		processed: filledPath,
+		original:  rawPath,
+		cleanup:   cleanup,
+	}
 }
 
 func fillSpeedtestBorder(inputPath, outputPath string, border int) error {
