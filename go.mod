@@ -3,6 +3,7 @@ module github.com/Acacia415/TeleBox-Go
 go 1.26.0
 
 require (
+	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/gotd/td v0.161.0
 	github.com/miekg/dns v1.1.72
 	golang.org/x/crypto v0.54.0
