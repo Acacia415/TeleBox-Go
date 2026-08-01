@@ -457,6 +457,9 @@ journalctl -u telebox.service -n 50 --no-pager
 
 ### 更新插件
 
+插件与框架独立发布。普通插件修复不会要求重新下载主程序，也不会重新发布
+其他插件。插件目录默认从同一仓库的 `plugin-registry` 通道读取。
+
 在 Telegram 中发送：
 
 ```text

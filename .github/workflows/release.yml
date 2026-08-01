@@ -58,17 +58,33 @@ jobs:
             tar -C dist/stage -czf "dist/release/${package}.tar.gz" "${package}"
           done
 
-      - name: Build optional plugin packages
+      - name: Add plugin catalog compatibility snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          go run ./cmd/telebox-plugin-sdk release \
-            -tag "${GITHUB_REF_NAME}" \
-            -platforms "linux/amd64,linux/arm64" \
-            -min-host "0.5.0" \
-            -output dist/plugins
-          mv dist/plugins/catalog.json dist/release/plugin-catalog.json
-          mv dist/plugins/*.zip dist/release/
+          mkdir -p dist/catalog
+          if ! gh release download plugin-registry \
+            --pattern plugin-catalog.json \
+            --dir dist/catalog; then
+            echo "plugin-registry is missing; bootstrapping from the latest stable release"
+            gh release download \
+              --pattern plugin-catalog.json \
+              --dir dist/catalog
+            (
+              cd dist/catalog
+              sha256sum plugin-catalog.json > plugin-catalog.sha256
+            )
+            gh release create plugin-registry \
+              dist/catalog/plugin-catalog.json \
+              dist/catalog/plugin-catalog.sha256 \
+              --target "${GITHUB_SHA}" \
+              --prerelease \
+              --title "TeleBox-Go Plugin Registry" \
+              --notes "Mutable official plugin catalog. Plugin packages are published as independent pre-releases."
+          fi
+          cp dist/catalog/plugin-catalog.json dist/release/plugin-catalog.json
 
       - name: Write checksums
         shell: bash

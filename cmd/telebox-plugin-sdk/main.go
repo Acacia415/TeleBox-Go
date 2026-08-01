@@ -61,6 +61,21 @@ func buildRelease(ctx context.Context, args []string) error {
 		"public repository URL",
 	)
 	minHost := flags.String("min-host", "0.2.0", "minimum TeleBox-Go version")
+	pluginsValue := flags.String(
+		"plugins",
+		"",
+		"comma-separated plugins to build; empty builds all",
+	)
+	baseCatalog := flags.String(
+		"base-catalog",
+		"",
+		"existing catalog to merge selected plugin releases into",
+	)
+	keepReleases := flags.Int(
+		"keep-releases",
+		3,
+		"number of catalog releases retained per updated plugin",
+	)
 	goBinary := flags.String("go", "", "Go toolchain binary")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -78,6 +93,9 @@ func buildRelease(ctx context.Context, args []string) error {
 		Tag:           *tag,
 		RepositoryURL: *repositoryURL,
 		Platforms:     platforms,
+		PluginNames:   pluginrelease.ParsePluginNames(*pluginsValue),
+		BaseCatalog:   *baseCatalog,
+		KeepReleases:  *keepReleases,
 		GoBinary:      *goBinary,
 		MinimumHost:   *minHost,
 	})
@@ -165,5 +183,6 @@ Usage:
   telebox-plugin-sdk list
   telebox-plugin-sdk build -plugin <name> -goos linux -goarch amd64 -output <dir>
   telebox-plugin-sdk build-all -goos linux -goarch arm64 -output <dir>
-  telebox-plugin-sdk release -tag <tag> -platforms linux/amd64,linux/arm64 -output <dir>`)
+  telebox-plugin-sdk release -tag <tag> -platforms linux/amd64,linux/arm64 -output <dir>
+  telebox-plugin-sdk release -plugins <name> -base-catalog <catalog.json> -tag <tag> -output <dir>`)
 }

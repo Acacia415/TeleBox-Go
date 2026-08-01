@@ -31,7 +31,7 @@
     "enabled": [],
     "disabled": [],
     "directory": "data/plugins",
-    "catalog_url": "https://github.com/Acacia415/TeleBox-Go/releases/latest/download/plugin-catalog.json",
+    "catalog_url": "https://github.com/Acacia415/TeleBox-Go/releases/download/plugin-registry/plugin-catalog.json",
     "max_archive_bytes": 134217728
   },
   "logging": {
