@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
@@ -13,7 +14,10 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
 )
 
-const maxDeleteCount = 99
+const (
+	maxDeleteCount           = 99
+	completionNoticeLifetime = 3 * time.Second
+)
 
 type Plugin struct {
 	services service.Container
@@ -26,7 +30,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "bulk_delete",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "批量删除范围消息或自己最近的消息",
 	}
 }
@@ -134,12 +138,11 @@ func (p *Plugin) deleteRecentOwn(
 		return p.respond(ctx, request, "❌ 删除消息失败："+err.Error())
 	}
 	if found > 0 {
-		_, err := p.services.Telegram.SendText(
+		return p.sendCompletionNotice(
 			ctx,
 			request.Message.ChatID,
 			fmt.Sprintf("✅ 已删除最近 %d 条消息", found),
 		)
-		return err
 	}
 	return nil
 }
@@ -201,12 +204,46 @@ func (p *Plugin) deleteRange(
 	); err != nil {
 		return p.respond(ctx, request, "❌ 删除范围消息失败："+err.Error())
 	}
-	_, err = p.services.Telegram.SendText(
+	return p.sendCompletionNotice(
 		ctx,
 		request.Message.ChatID,
 		fmt.Sprintf("✅ 已删除范围内 %d 条消息", deletedContent),
 	)
-	return err
+}
+
+func (p *Plugin) sendCompletionNotice(
+	ctx context.Context,
+	chatID int64,
+	text string,
+) error {
+	return p.sendTransientNotice(ctx, chatID, text, completionNoticeLifetime)
+}
+
+func (p *Plugin) sendTransientNotice(
+	ctx context.Context,
+	chatID int64,
+	text string,
+	delay time.Duration,
+) error {
+	sent, err := p.services.Telegram.SendText(ctx, chatID, text)
+	if err != nil {
+		return err
+	}
+	time.AfterFunc(delay, func() {
+		deleteCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if deleteErr := p.services.Telegram.DeleteMessages(
+			deleteCtx,
+			sent.ChatID,
+			[]int{sent.MessageID},
+		); deleteErr != nil && p.services.Logger != nil {
+			p.services.Logger.Warn(
+				"delete bulk-delete completion notice",
+				"error", deleteErr,
+			)
+		}
+	})
+	return nil
 }
 
 func (p *Plugin) loadMode(ctx context.Context, key string) bool {
