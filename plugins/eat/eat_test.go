@@ -153,6 +153,35 @@ func TestFitWithin(t *testing.T) {
 	}
 }
 
+func TestTrimTransparentStickerCanvas(t *testing.T) {
+	t.Parallel()
+	source := image.NewNRGBA(image.Rect(0, 0, 6, 5))
+	for y := 1; y < 4; y++ {
+		for x := 2; x < 5; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{R: 200, G: 100, A: 255})
+		}
+	}
+	got := trimTransparent(source)
+	if got.Bounds().Dx() != 3 || got.Bounds().Dy() != 3 {
+		t.Fatalf("trimmed bounds = %v", got.Bounds())
+	}
+	if pixel := color.NRGBAModel.Convert(got.At(0, 0)).(color.NRGBA); pixel.R != 200 || pixel.G != 100 || pixel.A != 255 {
+		t.Fatalf("trimmed first pixel = %+v", pixel)
+	}
+}
+
+func TestResizeUsesSmoothInterpolation(t *testing.T) {
+	t.Parallel()
+	source := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	source.SetNRGBA(0, 0, color.NRGBA{A: 255})
+	source.SetNRGBA(1, 0, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	got := resize(source, 3, 1)
+	middle := got.NRGBAAt(1, 0)
+	if middle.R == 0 || middle.R == 255 {
+		t.Fatalf("middle pixel was not interpolated: %+v", middle)
+	}
+}
+
 func TestStickerOutputIsWebP(t *testing.T) {
 	t.Parallel()
 	if stickerFileName != "output.webp" || stickerMIMEType != "image/webp" {

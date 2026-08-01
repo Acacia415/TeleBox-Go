@@ -28,6 +28,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
 	"github.com/HugoSmits86/nativewebp"
+	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )
 
@@ -98,7 +99,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.3.3",
+		Version:     "0.3.4",
 		Description: "使用头像或回复图片制作静态表情",
 	}
 }
@@ -478,7 +479,13 @@ func (p *Plugin) youImage(
 		return nil, err
 	}
 	decoded, _, err := image.Decode(bytes.NewReader(data.Bytes()))
-	return decoded, err
+	if err != nil {
+		return nil, err
+	}
+	if replied.Media.Kind == telegram.MediaSticker {
+		decoded = trimTransparent(decoded)
+	}
+	return decoded, nil
 }
 
 func (p *Plugin) profileImage(ctx context.Context, userID int64) (image.Image, error) {
@@ -512,7 +519,7 @@ func (p *Plugin) applyRole(
 	if width <= 0 || height <= 0 || width > 2048 || height > 2048 {
 		return errors.New("蒙版尺寸无效")
 	}
-	icon := resize(avatar, width, height)
+	icon := resizeCover(avatar, width, height)
 	if position.Flip {
 		icon = flipHorizontal(icon)
 	}
@@ -683,15 +690,43 @@ func cloneNRGBA(source image.Image) *image.NRGBA {
 }
 
 func resize(source image.Image, width, height int) *image.NRGBA {
+	if width <= 0 || height <= 0 || source.Bounds().Dx() <= 0 || source.Bounds().Dy() <= 0 {
+		return image.NewNRGBA(image.Rect(0, 0, max(0, width), max(0, height)))
+	}
 	result := image.NewNRGBA(image.Rect(0, 0, width, height))
+	xdraw.CatmullRom.Scale(
+		result,
+		result.Bounds(),
+		source,
+		source.Bounds(),
+		xdraw.Src,
+		nil,
+	)
+	return result
+}
+
+func trimTransparent(source image.Image) image.Image {
 	bounds := source.Bounds()
-	for y := 0; y < height; y++ {
-		sourceY := bounds.Min.Y + y*bounds.Dy()/height
-		for x := 0; x < width; x++ {
-			sourceX := bounds.Min.X + x*bounds.Dx()/width
-			result.Set(x, y, source.At(sourceX, sourceY))
+	minX, minY := bounds.Max.X, bounds.Max.Y
+	maxX, maxY := bounds.Min.X, bounds.Min.Y
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if color.NRGBAModel.Convert(source.At(x, y)).(color.NRGBA).A == 0 {
+				continue
+			}
+			minX = min(minX, x)
+			minY = min(minY, y)
+			maxX = max(maxX, x+1)
+			maxY = max(maxY, y+1)
 		}
 	}
+	if minX >= maxX || minY >= maxY ||
+		(minX == bounds.Min.X && minY == bounds.Min.Y &&
+			maxX == bounds.Max.X && maxY == bounds.Max.Y) {
+		return source
+	}
+	result := image.NewNRGBA(image.Rect(0, 0, maxX-minX, maxY-minY))
+	draw.Draw(result, result.Bounds(), source, image.Pt(minX, minY), draw.Src)
 	return result
 }
 

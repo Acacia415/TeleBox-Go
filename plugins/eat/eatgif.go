@@ -33,7 +33,7 @@ const (
 	eatGIFTargetSize = 250 << 10
 )
 
-var eatGIFCRFLevels = []int{30, 35, 40, 45, 51, 57, 63}
+var eatGIFCRFLevels = []int{20, 26, 32, 38, 44, 50, 57, 63}
 
 type gifListEntry struct {
 	URL  string `json:"url"`
@@ -77,7 +77,7 @@ func NewGIF(services service.Container) *GIFPlugin {
 func (p *GIFPlugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eatgif",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "将双方头像逐帧合成到动态表情模板",
 	}
 }
@@ -257,13 +257,6 @@ func (p *GIFPlugin) generate(
 	instructions := make([]string, 0, len(detail.Frames)*2+1)
 	totalDuration := time.Duration(0)
 	for index, frame := range detail.Frames {
-		if index == 0 || (index+1)%10 == 0 || index+1 == len(detail.Frames) {
-			if err := p.respond(ctx, request, fmt.Sprintf(
-				"⏳ 合成帧 %d/%d…", index+1, len(detail.Frames),
-			)); err != nil {
-				return err
-			}
-		}
 		canvas, err := p.composeFrame(ctx, frame, you, me)
 		if err != nil {
 			return p.respond(ctx, request,
@@ -308,11 +301,8 @@ func (p *GIFPlugin) generate(
 		return p.respond(ctx, request, "❌ 写入帧序列失败："+err.Error())
 	}
 	outputPath := filepath.Join(jobDir, "output.webm")
-	if err := p.encode(ctx, request, jobDir, outputPath, totalDuration); err != nil {
+	if err := p.encode(ctx, jobDir, outputPath, totalDuration); err != nil {
 		return p.respond(ctx, request, "❌ 生成动态贴纸失败："+err.Error())
-	}
-	if err := p.respond(ctx, request, "⏳ 发送动态贴纸…"); err != nil {
-		return err
 	}
 	_, err = p.services.Telegram.SendFile(ctx, request.Message.ChatID, telegram.Upload{
 		Path:         outputPath,
@@ -380,7 +370,7 @@ func (p *GIFPlugin) applyRole(
 	if width <= 0 || height <= 0 || width > 2048 || height > 2048 {
 		return errors.New("蒙版尺寸无效")
 	}
-	icon := resize(avatar, width, height)
+	icon := resizeCover(avatar, width, height)
 	if position.Flip {
 		icon = flipHorizontal(icon)
 	}
@@ -397,23 +387,13 @@ func (p *GIFPlugin) applyRole(
 
 func (p *GIFPlugin) encode(
 	ctx context.Context,
-	request command.Request,
 	jobDir string,
 	outputPath string,
 	duration time.Duration,
 ) error {
-	filter := "scale=512:512:force_original_aspect_ratio=decrease"
-	if duration > 3*time.Second {
-		filter = fmt.Sprintf("setpts=%.8f*PTS,", 3/duration.Seconds()) + filter
-	}
+	filter := eatGIFFilter(duration)
 	var lastErr error
-	for index, crf := range eatGIFCRFLevels {
-		if err := p.respond(ctx, request, fmt.Sprintf(
-			"⏳ 编码动态贴纸（%d/%d，CRF %d）…",
-			index+1, len(eatGIFCRFLevels), crf,
-		)); err != nil {
-			return err
-		}
+	for _, crf := range eatGIFCRFLevels {
 		result, err := p.services.Tools.Run(ctx, toolrunner.Command{
 			Name: "ffmpeg",
 			Args: []string{
@@ -439,6 +419,13 @@ func (p *GIFPlugin) encode(
 		}
 		info, statErr := os.Stat(outputPath)
 		if statErr == nil && info.Size() > 0 && info.Size() <= eatGIFTargetSize {
+			if p.services.Logger != nil {
+				p.services.Logger.Info(
+					"eatgif encoded",
+					"crf", crf,
+					"bytes", info.Size(),
+				)
+			}
 			return nil
 		}
 		if statErr == nil {
@@ -446,6 +433,13 @@ func (p *GIFPlugin) encode(
 		}
 	}
 	return fallbackError(lastErr, "最低质量下仍无法压缩到 250 KiB")
+}
+
+func eatGIFFilter(duration time.Duration) string {
+	if duration > 3*time.Second {
+		return fmt.Sprintf("setpts=%.8f*PTS", 3/duration.Seconds())
+	}
+	return "null"
 }
 
 func (p *GIFPlugin) asset(ctx context.Context, relative string) ([]byte, error) {
