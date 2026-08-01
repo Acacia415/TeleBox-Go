@@ -1,6 +1,7 @@
 package eat
 
 import (
+	"bytes"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/Acacia415/TeleBox-Go/internal/service"
+	"github.com/HugoSmits86/nativewebp"
+	"golang.org/x/image/webp"
 )
 
 func TestEatAndEat2UsePlainSharedHelp(t *testing.T) {
@@ -147,6 +150,34 @@ func TestFitWithin(t *testing.T) {
 	got := fitWithin(source, 512, 512)
 	if got.Bounds().Dx() != 512 || got.Bounds().Dy() != 256 {
 		t.Fatalf("fitted bounds = %v", got.Bounds())
+	}
+}
+
+func TestStickerOutputIsWebP(t *testing.T) {
+	t.Parallel()
+	if stickerFileName != "output.webp" || stickerMIMEType != "image/webp" {
+		t.Fatalf("sticker output = %q, %q", stickerFileName, stickerMIMEType)
+	}
+	source := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			source.SetNRGBA(x, y, color.NRGBA{R: 255, A: uint8(64 + x*32)})
+		}
+	}
+	var encoded bytes.Buffer
+	if err := nativewebp.Encode(&encoded, source, nil); err != nil {
+		t.Fatal(err)
+	}
+	data := encoded.Bytes()
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		t.Fatalf("output is not WebP: %x", data[:min(len(data), 12)])
+	}
+	decoded, err := webp.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Bounds() != source.Bounds() {
+		t.Fatalf("decoded bounds = %v", decoded.Bounds())
 	}
 }
 

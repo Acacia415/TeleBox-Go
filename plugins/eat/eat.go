@@ -11,7 +11,6 @@ import (
 	"image/draw"
 	_ "image/gif"
 	"image/jpeg"
-	"image/png"
 	"io"
 	"math"
 	"math/rand/v2"
@@ -28,12 +27,15 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
+	"github.com/HugoSmits86/nativewebp"
 	_ "golang.org/x/image/webp"
 )
 
 const (
 	defaultConfigURL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/refs/heads/main/eat/config.json"
 	maxImageBytes    = 8 << 20
+	stickerFileName  = "output.webp"
+	stickerMIMEType  = "image/webp"
 )
 
 type role struct {
@@ -96,7 +98,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.3.2",
+		Version:     "0.3.3",
 		Description: "使用头像或回复图片制作静态表情",
 	}
 }
@@ -328,12 +330,12 @@ func (p *Plugin) generate(
 		return p.respond(ctx, request, "❌ 创建输出目录失败："+err.Error())
 	}
 	defer os.RemoveAll(jobDir)
-	outputPath := filepath.Join(jobDir, "output.png")
+	outputPath := filepath.Join(jobDir, stickerFileName)
 	output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return p.respond(ctx, request, "❌ 创建输出文件失败："+err.Error())
 	}
-	encodeErr := png.Encode(output, result)
+	encodeErr := nativewebp.Encode(output, result, nil)
 	closeErr := output.Close()
 	if encodeErr != nil {
 		return p.respond(ctx, request, "❌ 编码表情失败："+encodeErr.Error())
@@ -343,8 +345,8 @@ func (p *Plugin) generate(
 	}
 	_, err = p.services.Telegram.SendFile(ctx, request.Message.ChatID, telegram.Upload{
 		Path:         outputPath,
-		FileName:     "output.png",
-		MIMEType:     "image/png",
+		FileName:     stickerFileName,
+		MIMEType:     stickerMIMEType,
 		ReplyToID:    request.Message.ReplyToID,
 		Kind:         telegram.MediaSticker,
 		Width:        result.Bounds().Dx(),
