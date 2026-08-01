@@ -20,7 +20,7 @@ func TestCatalog(t *testing.T) {
 		t.Fatalf("pmcaptcha specification = %+v, found=%t", pmcaptcha, ok)
 	}
 	speedlink, ok := Find("speedlink")
-	if !ok || speedlink.MinHost != "0.7.1" {
+	if !ok || speedlink.MinHost != "0.7.2" {
 		t.Fatalf("speedlink specification = %+v, found=%t", speedlink, ok)
 	}
 	if _, exists := Find("unsupported"); exists {

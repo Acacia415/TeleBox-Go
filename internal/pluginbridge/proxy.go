@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
@@ -320,7 +321,7 @@ func (p *telegramProxy) SendFile(
 	chatID int64,
 	upload telegram.Upload,
 ) (telegram.SentMessage, error) {
-	staged, cleanup, err := p.stageUpload(upload.Path)
+	staged, cleanup, err := p.stageUpload(upload.Path, upload.FileName)
 	if err != nil {
 		return telegram.SentMessage{}, err
 	}
@@ -778,6 +779,7 @@ func (p *telegramProxy) SendInlineBotResult(
 
 func (p *telegramProxy) stageUpload(
 	source string,
+	fileName string,
 ) (string, func(), error) {
 	input, err := os.Open(source)
 	if err != nil {
@@ -792,7 +794,11 @@ func (p *telegramProxy) stageUpload(
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return "", func() {}, err
 	}
-	output, err := os.CreateTemp(directory, "upload-*")
+	extension := safeUploadExtension(source)
+	if extension == "" {
+		extension = safeUploadExtension(fileName)
+	}
+	output, err := os.CreateTemp(directory, "upload-*"+extension)
 	if err != nil {
 		return "", func() {}, err
 	}
@@ -807,6 +813,20 @@ func (p *telegramProxy) stageUpload(
 		return "", func() {}, err
 	}
 	return path, func() { _ = os.Remove(path) }, nil
+}
+
+func safeUploadExtension(value string) string {
+	extension := strings.ToLower(filepath.Ext(filepath.Base(value)))
+	if len(extension) < 2 || len(extension) > 11 {
+		return ""
+	}
+	for _, character := range extension[1:] {
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') {
+			return ""
+		}
+	}
+	return extension
 }
 
 func (p *telegramProxy) downloadTarget(
