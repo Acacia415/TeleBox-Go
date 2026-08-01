@@ -45,11 +45,19 @@ type role struct {
 	Flip       bool    `json:"flip"`
 }
 
+type stamp struct {
+	Size    *int     `json:"size"`
+	Scale   *float64 `json:"scale"`
+	Rotate  *float64 `json:"rotate"`
+	Opacity *float64 `json:"opacity"`
+}
+
 type entry struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Me   *role  `json:"me"`
-	You  *role  `json:"you"`
+	Name  string `json:"name"`
+	URL   string `json:"url"`
+	Me    *role  `json:"me"`
+	You   *role  `json:"you"`
+	Stamp *stamp `json:"stamp"`
 }
 
 type configDocument struct {
@@ -88,8 +96,8 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.3.1",
-		Description: "将用户头像或回复图片合成到静态表情模板",
+		Version:     "0.3.2",
+		Description: "使用头像或回复图片制作静态表情",
 	}
 }
 
@@ -97,7 +105,7 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{
 		{
 			Name:        "eat",
-			Description: "使用回复用户的头像生成表情",
+			Description: "把回复用户的头像套入表情模板",
 			Usage: []string{
 				"eat [模板名]（回复用户）",
 				"eat set [配置地址]",
@@ -111,7 +119,7 @@ func (p *Plugin) Commands() []command.Definition {
 		},
 		{
 			Name:        "eat2",
-			Description: "使用回复消息中的图片生成表情",
+			Description: "把回复消息中的图片套入表情模板",
 			Usage: []string{
 				"eat2 [模板名]（回复图片）",
 				"eat2 set [配置地址]",
@@ -154,7 +162,7 @@ func (p *Plugin) handle(
 		strings.EqualFold(request.Args[0], "c")) {
 		p.cfg = loadedConfig{}
 		clear(p.assetCache)
-		return p.respond(ctx, request, "✅ eat 内存缓存已清理")
+		return p.respond(ctx, request, "✅ 表情配置和临时缓存已清理")
 	}
 	if err := p.ensureConfig(ctx); err != nil {
 		return p.respond(ctx, request, "❌ 加载表情配置失败："+err.Error())
@@ -240,16 +248,8 @@ func (p *Plugin) loadConfig(ctx context.Context, configURL string) (loadedConfig
 	if len(document.Resources) == 0 {
 		return loadedConfig{}, errors.New("配置缺少 resources")
 	}
-	for key, item := range document.Resources {
-		if strings.TrimSpace(key) == "" || strings.TrimSpace(item.Name) == "" ||
-			strings.TrimSpace(item.URL) == "" || (item.Me == nil && item.You == nil) {
-			return loadedConfig{}, fmt.Errorf("表情 %q 配置不完整", key)
-		}
-		for _, configuredRole := range []*role{item.Me, item.You} {
-			if configuredRole != nil && strings.TrimSpace(configuredRole.Mask) == "" {
-				return loadedConfig{}, fmt.Errorf("表情 %q 的蒙版为空", key)
-			}
-		}
+	if err := validateEntries(document.Resources); err != nil {
+		return loadedConfig{}, err
 	}
 	base, err := resourceBase(configURL)
 	if err != nil {
@@ -268,7 +268,7 @@ func (p *Plugin) generate(
 	selected entry,
 	useMedia bool,
 ) error {
-	if err := p.respond(ctx, request, "⏳ 生成「"+selected.Name+"」…"); err != nil {
+	if err := p.respond(ctx, request, "⏳ 正在制作「"+selected.Name+"」…"); err != nil {
 		return err
 	}
 	messages, err := p.services.Telegram.GetMessages(
@@ -301,19 +301,24 @@ func (p *Plugin) generate(
 	if err != nil {
 		return p.respond(ctx, request, "❌ 下载表情模板失败："+err.Error())
 	}
-	canvas, _, err := image.Decode(bytes.NewReader(baseBytes))
+	template, _, err := image.Decode(bytes.NewReader(baseBytes))
 	if err != nil {
 		return p.respond(ctx, request, "❌ 解码表情模板失败："+err.Error())
 	}
-	result := cloneNRGBA(canvas)
-	if selected.You != nil {
-		if err := p.applyRole(ctx, result, youImage, *selected.You); err != nil {
-			return p.respond(ctx, request, "❌ 合成目标头像失败："+err.Error())
+	var result *image.NRGBA
+	if selected.Stamp != nil {
+		result = composeStamp(youImage, template, selected.Stamp.settings())
+	} else {
+		result = cloneNRGBA(template)
+		if selected.You != nil {
+			if err := p.applyRole(ctx, result, youImage, *selected.You); err != nil {
+				return p.respond(ctx, request, "❌ 合成目标头像失败："+err.Error())
+			}
 		}
-	}
-	if selected.Me != nil {
-		if err := p.applyRole(ctx, result, meImage, *selected.Me); err != nil {
-			return p.respond(ctx, request, "❌ 合成当前账号头像失败："+err.Error())
+		if selected.Me != nil {
+			if err := p.applyRole(ctx, result, meImage, *selected.Me); err != nil {
+				return p.respond(ctx, request, "❌ 合成当前账号头像失败："+err.Error())
+			}
 		}
 	}
 	result = fitWithin(result, 512, 512)
@@ -355,6 +360,95 @@ func (p *Plugin) generate(
 		)
 	}
 	return nil
+}
+
+type stampSettings struct {
+	Size    int
+	Scale   float64
+	Rotate  float64
+	Opacity float64
+}
+
+func (value stamp) settings() stampSettings {
+	result := stampSettings{
+		Size:    512,
+		Scale:   0.9,
+		Rotate:  -12,
+		Opacity: 0.6,
+	}
+	if value.Size != nil {
+		result.Size = *value.Size
+	}
+	if value.Scale != nil {
+		result.Scale = *value.Scale
+	}
+	if value.Rotate != nil {
+		result.Rotate = *value.Rotate
+	}
+	if value.Opacity != nil {
+		result.Opacity = *value.Opacity
+	}
+	return result
+}
+
+func validateEntries(entries map[string]entry) error {
+	for key, item := range entries {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(item.Name) == "" ||
+			strings.TrimSpace(item.URL) == "" ||
+			(item.Me == nil && item.You == nil && item.Stamp == nil) {
+			return fmt.Errorf("表情 %q 配置不完整", key)
+		}
+		for _, configuredRole := range []*role{item.Me, item.You} {
+			if configuredRole != nil && strings.TrimSpace(configuredRole.Mask) == "" {
+				return fmt.Errorf("表情 %q 的蒙版为空", key)
+			}
+		}
+		if item.Stamp == nil {
+			continue
+		}
+		settings := item.Stamp.settings()
+		if settings.Size < 1 || settings.Size > 2048 ||
+			settings.Scale <= 0 || settings.Scale > 4 ||
+			math.IsNaN(settings.Scale) || math.IsInf(settings.Scale, 0) ||
+			math.IsNaN(settings.Rotate) || math.IsInf(settings.Rotate, 0) ||
+			settings.Opacity < 0 || settings.Opacity > 1 ||
+			math.IsNaN(settings.Opacity) || math.IsInf(settings.Opacity, 0) {
+			return fmt.Errorf("表情 %q 的印章参数无效", key)
+		}
+	}
+	return nil
+}
+
+func composeStamp(
+	avatar image.Image,
+	overlay image.Image,
+	settings stampSettings,
+) *image.NRGBA {
+	base := resizeCover(avatar, settings.Size, settings.Size)
+	overlayWidth := max(1, int(math.Round(
+		float64(settings.Size)*settings.Scale,
+	)))
+	prepared := resizeToWidth(overlay, overlayWidth)
+	if settings.Rotate != 0 {
+		prepared = rotate(prepared, settings.Rotate)
+	}
+	prepared = resizeInside(prepared, settings.Size, settings.Size)
+	prepared = adjustOpacity(prepared, settings.Opacity)
+	left := (base.Bounds().Dx() - prepared.Bounds().Dx()) / 2
+	top := (base.Bounds().Dy() - prepared.Bounds().Dy()) / 2
+	draw.Draw(
+		base,
+		image.Rect(
+			left,
+			top,
+			left+prepared.Bounds().Dx(),
+			top+prepared.Bounds().Dy(),
+		),
+		prepared,
+		prepared.Bounds().Min,
+		draw.Over,
+	)
+	return base
 }
 
 func (p *Plugin) youImage(
@@ -599,6 +693,65 @@ func resize(source image.Image, width, height int) *image.NRGBA {
 	return result
 }
 
+func resizeCover(source image.Image, width, height int) *image.NRGBA {
+	bounds := source.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 || width <= 0 || height <= 0 {
+		return image.NewNRGBA(image.Rect(0, 0, max(0, width), max(0, height)))
+	}
+	scale := math.Max(
+		float64(width)/float64(bounds.Dx()),
+		float64(height)/float64(bounds.Dy()),
+	)
+	resized := resize(
+		source,
+		max(width, int(math.Ceil(float64(bounds.Dx())*scale))),
+		max(height, int(math.Ceil(float64(bounds.Dy())*scale))),
+	)
+	return centerCrop(resized, width, height)
+}
+
+func resizeToWidth(source image.Image, width int) *image.NRGBA {
+	bounds := source.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 || width <= 0 {
+		return image.NewNRGBA(image.Rect(0, 0, max(0, width), 0))
+	}
+	height := max(1, int(math.Round(
+		float64(bounds.Dy())*float64(width)/float64(bounds.Dx()),
+	)))
+	return resize(source, width, height)
+}
+
+func resizeInside(source image.Image, maxWidth, maxHeight int) *image.NRGBA {
+	bounds := source.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 || maxWidth <= 0 || maxHeight <= 0 {
+		return image.NewNRGBA(image.Rect(0, 0, 0, 0))
+	}
+	scale := math.Min(
+		float64(maxWidth)/float64(bounds.Dx()),
+		float64(maxHeight)/float64(bounds.Dy()),
+	)
+	return resize(
+		source,
+		max(1, int(math.Round(float64(bounds.Dx())*scale))),
+		max(1, int(math.Round(float64(bounds.Dy())*scale))),
+	)
+}
+
+func adjustOpacity(source image.Image, factor float64) *image.NRGBA {
+	bounds := source.Bounds()
+	result := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	for y := 0; y < bounds.Dy(); y++ {
+		for x := 0; x < bounds.Dx(); x++ {
+			current := color.NRGBAModel.Convert(
+				source.At(bounds.Min.X+x, bounds.Min.Y+y),
+			).(color.NRGBA)
+			current.A = uint8(math.Round(float64(current.A) * factor))
+			result.SetNRGBA(x, y, current)
+		}
+	}
+	return result
+}
+
 func rotate(source image.Image, degrees float64) *image.NRGBA {
 	radians := degrees * math.Pi / 180
 	sine, cosine := math.Sin(radians), math.Cos(radians)
@@ -716,19 +869,22 @@ func init() {
 	image.RegisterFormat("jpeg", "jpeg", jpeg.Decode, jpeg.DecodeConfig)
 }
 
-const eatGuideHTML = `<b>头像静态表情</b>
+const eatGuideHTML = `<b>静态表情</b>
 
-首次使用时读取远程模板配置；模板图片会按需下载并在当前进程中缓存。
+<code>eat</code> 和 <code>eat2</code> 使用同一套模板。
 
-<code>{{prefix}}eat</code> 查看模板列表
-回复用户消息后发送 <code>{{prefix}}eat &lt;模板名&gt;</code>，使用双方头像生成表情
-回复用户消息后发送 <code>{{prefix}}eat</code>，随机选择模板
+<b>使用头像</b>
+<code>{{prefix}}eat</code>  查看模板列表
+回复用户消息后发送 <code>{{prefix}}eat &lt;模板名&gt;</code>
+模板名留空时随机选择
 
-<code>{{prefix}}eat2</code> 查看模板列表
-回复含图片的消息后发送 <code>{{prefix}}eat2 &lt;模板名&gt;</code>，使用消息图片生成表情
-回复含图片的消息后发送 <code>{{prefix}}eat2</code>，随机选择模板
+<b>使用图片</b>
+<code>{{prefix}}eat2</code>  查看模板列表
+回复图片后发送 <code>{{prefix}}eat2 &lt;模板名&gt;</code>
+模板名留空时随机选择
 
-<code>{{prefix}}eat set [配置地址]</code> 更新模板配置
-<code>{{prefix}}eat clear</code> 清理内存中的配置和图片缓存
+<b>模板配置</b>
+<code>{{prefix}}eat set [配置地址]</code>  更新模板配置
+<code>{{prefix}}eat clear</code>  清理配置缓存
 
-<code>eat</code> 与 <code>eat2</code> 使用同一套模板配置，区别是前者读取头像，后者读取回复消息中的图片。`
+上面的设置和清理命令也可以将 <code>eat</code> 换成 <code>eat2</code>。`

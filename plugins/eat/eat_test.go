@@ -1,11 +1,115 @@
 package eat
 
 import (
+	"encoding/json"
 	"image"
 	"image/color"
 	"strings"
 	"testing"
+
+	"github.com/Acacia415/TeleBox-Go/internal/service"
 )
+
+func TestEatAndEat2UsePlainSharedHelp(t *testing.T) {
+	t.Parallel()
+	definitions := New(service.Container{}).Commands()
+	if len(definitions) != 2 {
+		t.Fatalf("command count = %d", len(definitions))
+	}
+	forbidden := []string{"AI", "智能", "精确", "精准"}
+	for _, definition := range definitions {
+		if definition.Name != "eat" && definition.Name != "eat2" {
+			t.Fatalf("unexpected command %q", definition.Name)
+		}
+		for _, phrase := range forbidden {
+			if strings.Contains(definition.Description, phrase) ||
+				strings.Contains(definition.HelpHTML, phrase) {
+				t.Fatalf("%s help contains %q", definition.Name, phrase)
+			}
+		}
+		if definition.HelpHTML != eatGuideHTML {
+			t.Fatalf("%s does not use shared help", definition.Name)
+		}
+	}
+}
+
+func TestValidateEntriesAcceptsStampMode(t *testing.T) {
+	t.Parallel()
+	var document configDocument
+	err := json.Unmarshal([]byte(`{
+		"resources": {
+			"tuzai": {
+				"name": "屠宰",
+				"url": "eat/eattuzai.png",
+				"stamp": {
+					"size": 512,
+					"scale": 0.9,
+					"rotate": -12,
+					"opacity": 0.6
+				}
+			}
+		}
+	}`), &document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateEntries(document.Resources); err != nil {
+		t.Fatalf("validateEntries() error = %v", err)
+	}
+	settings := document.Resources["tuzai"].Stamp.settings()
+	if settings.Size != 512 || settings.Scale != 0.9 ||
+		settings.Rotate != -12 || settings.Opacity != 0.6 {
+		t.Fatalf("stamp settings = %+v", settings)
+	}
+}
+
+func TestValidateEntriesRejectsInvalidStamp(t *testing.T) {
+	t.Parallel()
+	invalidOpacity := 2.0
+	err := validateEntries(map[string]entry{
+		"stamp": {
+			Name: "印章",
+			URL:  "stamp.png",
+			Stamp: &stamp{
+				Opacity: &invalidOpacity,
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "印章参数无效") {
+		t.Fatalf("validateEntries() error = %v", err)
+	}
+}
+
+func TestComposeStampCentersOverlay(t *testing.T) {
+	t.Parallel()
+	avatar := image.NewNRGBA(image.Rect(0, 0, 4, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 4; x++ {
+			avatar.SetNRGBA(x, y, color.NRGBA{B: 255, A: 255})
+		}
+	}
+	overlay := image.NewNRGBA(image.Rect(0, 0, 4, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 4; x++ {
+			overlay.SetNRGBA(x, y, color.NRGBA{R: 255, A: 255})
+		}
+	}
+	result := composeStamp(avatar, overlay, stampSettings{
+		Size:    4,
+		Scale:   0.5,
+		Rotate:  0,
+		Opacity: 0.5,
+	})
+	if result.Bounds() != image.Rect(0, 0, 4, 4) {
+		t.Fatalf("result bounds = %v", result.Bounds())
+	}
+	if top := result.NRGBAAt(1, 0); top.B != 255 || top.R != 0 {
+		t.Fatalf("top pixel = %+v", top)
+	}
+	if middle := result.NRGBAAt(1, 1); middle.R == 0 || middle.B == 0 {
+		t.Fatalf("middle pixel = %+v", middle)
+	}
+}
 
 func TestOfficialResourceBase(t *testing.T) {
 	got, err := resourceBase(defaultConfigURL)
