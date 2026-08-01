@@ -19,6 +19,10 @@ func TestCatalog(t *testing.T) {
 	if !ok || pmcaptcha.MinHost != "0.7.0" {
 		t.Fatalf("pmcaptcha specification = %+v, found=%t", pmcaptcha, ok)
 	}
+	speedlink, ok := Find("speedlink")
+	if !ok || speedlink.MinHost != "0.7.1" {
+		t.Fatalf("speedlink specification = %+v, found=%t", speedlink, ok)
+	}
 	if _, exists := Find("unsupported"); exists {
 		t.Fatal(`Find("unsupported") = true`)
 	}

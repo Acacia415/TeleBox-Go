@@ -100,12 +100,14 @@ func convert(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "convert backup: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "converted %d plugins; session format=%s dc=%d; assets=%d files/%d bytes; preserved legacy assets=%d files/%d bytes\n",
+	fmt.Fprintf(stdout, "converted %d plugins; session format=%s dc=%d; assets=%d files/%d bytes; quarantined=%d files/%d bytes; preserved legacy assets=%d files/%d bytes\n",
 		result.Inventory.PluginCount,
 		result.Inventory.SessionFormat,
 		result.Inventory.SessionDC,
 		result.Assets.Files,
 		result.Assets.Bytes,
+		result.Assets.QuarantinedFiles,
+		result.Assets.QuarantinedBytes,
 		result.LegacyAssets.Files,
 		result.LegacyAssets.Bytes,
 	)
@@ -184,11 +186,15 @@ func importDefaults() (configPath, sessionPath, assetsPath, legacyAssetsPath str
 }
 
 func formatImportStats(stats migration.ImportStats) string {
-	return fmt.Sprintf(
+	text := fmt.Sprintf(
 		"%d 个复制/%d 个已存在",
 		stats.CopiedFiles,
 		stats.SkippedFiles,
 	)
+	if stats.QuarantinedFiles > 0 {
+		text += fmt.Sprintf("/%d 个可执行文件已隔离", stats.QuarantinedFiles)
+	}
+	return text
 }
 
 func printUsage(output io.Writer) {

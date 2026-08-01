@@ -14,7 +14,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +34,7 @@ import (
 
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
+	"github.com/Acacia415/TeleBox-Go/internal/managedtool"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
@@ -81,6 +88,9 @@ type speedResult struct {
 		Bytes     float64 `json:"bytes"`
 	} `json:"upload"`
 	Timestamp string `json:"timestamp"`
+	Result    struct {
+		URL string `json:"url"`
+	} `json:"result"`
 }
 
 type Plugin struct {
@@ -92,6 +102,7 @@ type Plugin struct {
 	mu        sync.Mutex
 	masterKey []byte
 	servers   []remoteServer
+	timeout   time.Duration
 }
 
 func New(services service.Container) *Plugin {
@@ -104,13 +115,14 @@ func New(services service.Container) *Plugin {
 		assetDir:  assetDir,
 		legacyDir: legacySpeedlinkAssetDir(services.LegacyAssetsDir),
 		workDir:   filepath.Join(os.TempDir(), "telebox-go-speedlink"),
+		timeout:   5 * time.Minute,
 	}
 }
 
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "speedlink",
-		Version:     "0.3.1",
+		Version:     "0.4.0",
 		Description: "通过 SSH 在本机或多台远程服务器运行 Ookla Speedtest",
 	}
 }
@@ -122,11 +134,13 @@ func (p *Plugin) Commands() []command.Definition {
 		Description: "在本机或多台远程服务器运行 Ookla Speedtest",
 		Usage: []string{
 			"sl",
-			"sl <序号...>|all",
+			"sl <序号...>|all|all no <序号...>",
 			"sl add <别名> <user@host:port> password <密码>",
 			"sl add <别名> <user@host:port> key <私钥绝对路径>",
 			"sl list",
 			"sl del <序号>",
+			"sl rename <序号> <新名称>",
+			"sl timeout [10-600]",
 			"sl backup",
 			"sl restore confirm（回复备份文件）",
 		},
@@ -148,6 +162,12 @@ func (p *Plugin) Start(ctx context.Context) error {
 		return err
 	}
 	p.masterKey = key
+	if data, getErr := p.services.Storage.Get(ctx, "speedlink", "timeout_seconds"); getErr == nil {
+		seconds, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if parseErr == nil && seconds >= 10 && seconds <= 600 {
+			p.timeout = time.Duration(seconds) * time.Second
+		}
+	}
 	if err := p.loadServers(ctx); err != nil {
 		return err
 	}
@@ -183,6 +203,10 @@ func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 		return p.list(ctx, request)
 	case "del", "delete":
 		return p.remove(ctx, request)
+	case "rename":
+		return p.rename(ctx, request)
+	case "timeout":
+		return p.configureTimeout(ctx, request)
 	case "backup":
 		return p.backup(ctx, request)
 	case "restore":
@@ -191,9 +215,26 @@ func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 		if len(p.servers) == 0 {
 			return p.respond(ctx, request, "❌ 尚未配置远程服务器")
 		}
-		indexes := make([]int, len(p.servers))
+		excluded := make(map[int]struct{})
+		if len(request.Args) >= 2 && strings.EqualFold(request.Args[1], "no") {
+			if len(request.Args) == 2 {
+				return p.respond(ctx, request, "❌ 请在 no 后填写要排除的服务器序号")
+			}
+			for _, value := range request.Args[2:] {
+				displayIndex, err := strconv.Atoi(value)
+				if err != nil || displayIndex <= 0 || displayIndex > len(p.servers) {
+					return p.respond(ctx, request, "❌ 无效的服务器序号："+value)
+				}
+				excluded[displayIndex-1] = struct{}{}
+			}
+		} else if len(request.Args) > 1 {
+			return p.respond(ctx, request, "❌ 用法："+request.Prefix+"sl all no <序号...>")
+		}
+		indexes := make([]int, 0, len(p.servers))
 		for index := range p.servers {
-			indexes[index] = index
+			if _, skip := excluded[index]; !skip {
+				indexes = append(indexes, index)
+			}
 		}
 		return p.runRemoteMany(ctx, request, indexes)
 	}
@@ -313,6 +354,56 @@ func (p *Plugin) remove(ctx context.Context, request command.Request) error {
 	return p.respond(ctx, request, "✅ 已删除服务器 "+removed.Name)
 }
 
+func (p *Plugin) rename(ctx context.Context, request command.Request) error {
+	if len(request.Args) < 3 {
+		return p.respond(ctx, request,
+			"用法："+request.Prefix+"sl rename <序号> <新名称>")
+	}
+	index, err := strconv.Atoi(request.Args[1])
+	name := strings.TrimSpace(strings.Join(request.Args[2:], " "))
+	if err != nil || index <= 0 || index > len(p.servers) || name == "" {
+		return p.respond(ctx, request, "❌ 服务器序号或新名称无效")
+	}
+	for position, server := range p.servers {
+		if position != index-1 && strings.EqualFold(server.Name, name) {
+			return p.respond(ctx, request, "❌ 已存在同名服务器")
+		}
+	}
+	oldName := p.servers[index-1].Name
+	p.servers[index-1].Name = name
+	if err := p.saveServers(ctx); err != nil {
+		p.servers[index-1].Name = oldName
+		return p.respond(ctx, request, "❌ 重命名失败："+err.Error())
+	}
+	return p.respond(ctx, request,
+		"✅ 已将服务器 "+oldName+" 重命名为 "+name)
+}
+
+func (p *Plugin) configureTimeout(ctx context.Context, request command.Request) error {
+	if len(request.Args) == 1 {
+		return p.respond(ctx, request, fmt.Sprintf(
+			"ℹ️ 当前测速超时：%d 秒\n使用 %ssl timeout <秒数> 修改",
+			int(p.timeout/time.Second), request.Prefix,
+		))
+	}
+	if len(request.Args) != 2 {
+		return p.respond(ctx, request,
+			"用法："+request.Prefix+"sl timeout <10-600>")
+	}
+	seconds, err := strconv.Atoi(request.Args[1])
+	if err != nil || seconds < 10 || seconds > 600 {
+		return p.respond(ctx, request, "❌ 超时时间必须为 10 到 600 秒")
+	}
+	if err := p.services.Storage.Put(
+		ctx, "speedlink", "timeout_seconds", []byte(strconv.Itoa(seconds)),
+	); err != nil {
+		return p.respond(ctx, request, "❌ 保存超时设置失败："+err.Error())
+	}
+	p.timeout = time.Duration(seconds) * time.Second
+	return p.respond(ctx, request,
+		fmt.Sprintf("✅ 测速超时已设置为 %d 秒", seconds))
+}
+
 func (p *Plugin) runLocal(ctx context.Context, request command.Request) error {
 	executable, err := p.findSpeedtest()
 	if err != nil {
@@ -325,24 +416,34 @@ func (p *Plugin) runLocal(ctx context.Context, request command.Request) error {
 				"❌ 自动安装 Ookla Speedtest CLI 失败："+sanitizeError(err))
 		}
 	}
-	if err := p.respond(ctx, request, "⏳ 本机测速…"); err != nil {
+	status, err := p.statusHTML(ctx, request, "⚡️ 正在进行<b>本机</b>速度测试...")
+	if err != nil {
 		return err
 	}
+	started := time.Now()
 	output, err := p.services.Tools.Run(ctx, toolrunner.Command{
 		Name:    executable,
 		Args:    []string{"--accept-license", "--accept-gdpr", "-f", "json"},
 		Env:     p.speedtestEnvironment(),
-		Timeout: 5 * time.Minute, MaxOutput: 512 << 10,
+		Timeout: p.timeout, MaxOutput: 512 << 10,
 	})
+	duration := time.Since(started)
 	if err != nil {
-		return p.respond(ctx, request,
-			"❌ 本机测速失败："+shortDetail(output.Stderr, err))
+		return p.editStatusHTML(ctx, status,
+			"❌ <b>速度测试失败</b>\n\n<code>"+
+				html.EscapeString(shortDetail(output.Stderr, err))+"</code>")
 	}
 	result, err := parseSpeedResult(output.Stdout)
 	if err != nil {
-		return p.respond(ctx, request, "❌ 解析本机测速结果失败："+err.Error())
+		return p.editStatusHTML(ctx, status,
+			"❌ <b>速度测试失败</b>\n\n<code>无法解析测速结果</code>")
 	}
-	return p.respond(ctx, request, formatSpeedResult("本机", result))
+	if err := p.sendSpeedResult(ctx, request.Message.ChatID, "", true, result, duration); err != nil {
+		return p.editStatusHTML(ctx, status,
+			"❌ <b>发送测速结果失败</b>\n\n<code>"+
+				html.EscapeString(sanitizeError(err))+"</code>")
+	}
+	return p.deleteStatus(ctx, status)
 }
 
 func (p *Plugin) speedtestEnvironment() []string {
@@ -373,30 +474,47 @@ func (p *Plugin) runRemoteMany(
 	if len(indexes) == 0 {
 		return p.respond(ctx, request, "❌ 没有有效的测速服务器")
 	}
-	if err := p.respond(ctx, request, fmt.Sprintf(
-		"⚡️ 准备测试 %d 台远程服务器…", len(indexes),
-	)); err != nil {
-		return err
-	}
-	var results []string
-	for position, index := range indexes {
-		server := p.servers[index]
-		if err := p.respond(ctx, request, fmt.Sprintf(
-			"⏳ [%d/%d] 测试 %s…",
-			position+1, len(indexes), server.Name,
-		)); err != nil {
+	if request.Message.Outgoing {
+		if err := p.services.Telegram.DeleteMessages(
+			ctx, request.Message.ChatID, []int{request.Message.ID},
+		); err != nil {
 			return err
 		}
-		result, err := p.runRemote(ctx, server)
+	}
+	for position, index := range indexes {
+		server := p.servers[index]
+		statusText := fmt.Sprintf(
+			"⚡️ [%d/%d] 正在为 <b>%s</b> 进行远程测速...",
+			position+1, len(indexes), html.EscapeString(server.Name),
+		)
+		status, err := telegram.SendHTML(
+			ctx, p.services.Telegram, request.Message.ChatID, statusText,
+		)
 		if err != nil {
-			results = append(results,
-				"❌ "+server.Name+"："+
-					sanitizeError(err))
+			return err
+		}
+		started := time.Now()
+		result, err := p.runRemote(ctx, server)
+		duration := time.Since(started)
+		if err != nil {
+			_ = p.editStatusHTML(ctx, status,
+				"❌ <b>"+html.EscapeString(server.Name)+
+					"</b> 测速失败\n\n<code>"+
+					html.EscapeString(sanitizeError(err))+"</code>")
 			continue
 		}
-		results = append(results, formatSpeedResult(server.Name, result))
+		if err := p.sendSpeedResult(
+			ctx, request.Message.ChatID, server.Name, false, result, duration,
+		); err != nil {
+			_ = p.editStatusHTML(ctx, status,
+				"❌ <b>"+html.EscapeString(server.Name)+
+					"</b> 结果发送失败\n\n<code>"+
+					html.EscapeString(sanitizeError(err))+"</code>")
+			continue
+		}
+		_ = p.deleteStatus(ctx, status)
 	}
-	return p.respond(ctx, request, strings.Join(results, "\n\n"))
+	return nil
 }
 
 func (p *Plugin) runRemote(
@@ -451,7 +569,7 @@ func (p *Plugin) runRemote(
 			return speedResult{}, output.err
 		}
 		return parseSpeedResult(string(output.data))
-	case <-time.After(5 * time.Minute):
+	case <-time.After(p.timeout):
 		_ = client.Close()
 		return speedResult{}, errors.New("远程测速超时")
 	}
@@ -693,7 +811,22 @@ func (p *Plugin) findSpeedtest() (string, error) {
 	for _, name := range names {
 		candidate := filepath.Join(p.assetDir, name)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
+			if managedtool.Verify(candidate, p.speedtestReceiptPath()) == nil {
+				return candidate, nil
+			}
+			quarantined, quarantineErr := managedtool.Quarantine(
+				candidate, filepath.Join(p.assetDir, "quarantine"),
+			)
+			if quarantineErr != nil {
+				return "", fmt.Errorf("隔离旧 Speedtest 失败: %w", quarantineErr)
+			}
+			_ = os.Remove(p.speedtestReceiptPath())
+			if quarantined != "" && p.services.Logger != nil {
+				p.services.Logger.Info(
+					"quarantined unmanaged speedtest",
+					"path", quarantined,
+				)
+			}
 		}
 		if path, err := p.services.Tools.LookPath(name); err == nil {
 			return path, nil
@@ -732,7 +865,25 @@ func (p *Plugin) installSpeedtest(ctx context.Context) (string, error) {
 	if err := extractSpeedtestArchive(response.Body, target); err != nil {
 		return "", err
 	}
+	digest, err := managedtool.FileSHA256(target)
+	if err != nil {
+		_ = os.Remove(target)
+		return "", err
+	}
+	if err := managedtool.WriteReceipt(
+		p.speedtestReceiptPath(),
+		"https://install.speedtest.net/app/cli/"+filename,
+		speedtestVersion,
+		digest,
+	); err != nil {
+		_ = os.Remove(target)
+		return "", fmt.Errorf("保存 Speedtest 安装凭据: %w", err)
+	}
 	return target, nil
+}
+
+func (p *Plugin) speedtestReceiptPath() string {
+	return filepath.Join(p.assetDir, ".speedtest-managed.json")
 }
 
 func extractSpeedtestArchive(document []byte, target string) error {
@@ -1043,52 +1194,232 @@ func parseSpeedResult(output string) (speedResult, error) {
 	return result, nil
 }
 
-func formatSpeedResult(label string, value speedResult) string {
-	connection := "IPv4"
-	if strings.Contains(value.Interface.ExternalIP, ":") {
-		connection = "IPv6"
-	}
-	return fmt.Sprintf(
-		"⚡️ %s\n"+
-			"运营商：%s\n"+
-			"节点：%d - %s - %s\n"+
-			"连接：%s - %s\n"+
-			"延迟：⇔ %.3f ms  ± %.3f ms\n"+
-			"速率：↓ %s  ↑ %s\n"+
-			"流量：↓ %s  ↑ %s\n"+
-			"时间：%s",
-		label,
-		fallback(value.ISP, "未知"),
-		value.Server.ID,
-		fallback(value.Server.Name, "未知"),
-		fallback(value.Server.Location, "未知"),
-		connection,
-		fallback(value.Interface.Name, "未知"),
-		value.Ping.Latency,
-		value.Ping.Jitter,
-		formatBandwidth(value.Download.Bandwidth),
-		formatBandwidth(value.Upload.Bandwidth),
-		formatBytes(value.Download.Bytes),
-		formatBytes(value.Upload.Bytes),
-		strings.Replace(strings.TrimSuffix(value.Timestamp, "Z"), "T", " ", 1),
+func (p *Plugin) sendSpeedResult(
+	ctx context.Context,
+	chatID int64,
+	label string,
+	local bool,
+	value speedResult,
+	duration time.Duration,
+) error {
+	asInfo, countryFlag := p.lookupIPDetails(ctx, value.Interface.ExternalIP)
+	caption := formatSpeedResultHTML(
+		label, local, value, asInfo, countryFlag, duration,
 	)
+	imagePath, cleanup := p.saveSpeedtestImage(ctx, value.Result.URL)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if imagePath != "" {
+		_, err := p.services.Telegram.SendFile(ctx, chatID, telegram.Upload{
+			Path:        imagePath,
+			FileName:    "speedtest.png",
+			MIMEType:    "image/png",
+			Caption:     caption,
+			CaptionHTML: true,
+			Kind:        telegram.MediaPhoto,
+		})
+		return err
+	}
+	_, err := telegram.SendHTML(ctx, p.services.Telegram, chatID, caption)
+	return err
 }
 
-func formatBandwidth(bytesPerSecond float64) string {
-	return formatUnit(bytesPerSecond*8, []string{"bps", "Kbps", "Mbps", "Gbps"})
+func formatSpeedResultHTML(
+	label string,
+	local bool,
+	value speedResult,
+	asInfo string,
+	countryFlag string,
+	duration time.Duration,
+) string {
+	heading := "<b>" + html.EscapeString(label) + "</b>"
+	if local {
+		heading = "<b>⚡️SPEEDTEST by OOKLA</b>"
+	}
+	connection := "4"
+	if strings.Contains(value.Interface.ExternalIP, ":") {
+		connection = "6"
+	}
+	name := html.EscapeString(value.ISP + " " + asInfo)
+	beijingTime := value.Timestamp
+	if parsed, err := time.Parse(time.RFC3339Nano, value.Timestamp); err == nil {
+		beijingTime = parsed.In(time.FixedZone("UTC+8", 8*60*60)).
+			Format("2006-01-02 15:04:05")
+	}
+	return strings.Join([]string{
+		heading + " " + countryFlag,
+		"<code>Name</code>  <code>" + name + "</code>",
+		fmt.Sprintf(
+			"<code>Node</code>  <code>%d - %s - %s</code>",
+			value.Server.ID,
+			html.EscapeString(value.Server.Name),
+			html.EscapeString(value.Server.Location),
+		),
+		"<code>Conn</code>  <code>Multi - IPv" + connection + " - " +
+			html.EscapeString(value.Interface.Name) + "</code>",
+		fmt.Sprintf(
+			"<code>Ping</code>  <code>⇔%.3fms ±%.3fms</code>",
+			value.Ping.Latency, value.Ping.Jitter,
+		),
+		"<code>Rate</code>  <code>↓" + unitConvert(value.Download.Bandwidth, false) +
+			" ↑" + unitConvert(value.Upload.Bandwidth, false) + "</code>",
+		"<code>Data</code>  <code>↓" + unitConvert(value.Download.Bytes, true) +
+			" ↑" + unitConvert(value.Upload.Bytes, true) + "</code>",
+		"<code>Time</code>  <code>" + html.EscapeString(beijingTime) + " (UTC+8)</code>",
+		fmt.Sprintf("<code>Used</code>  <code>%.2fs</code>", duration.Seconds()),
+		"<code>Link</code>  " + html.EscapeString(value.Result.URL),
+	}, "\n")
 }
 
-func formatBytes(value float64) string {
-	return formatUnit(value, []string{"B", "KB", "MB", "GB", "TB"})
-}
-
-func formatUnit(value float64, units []string) string {
+func unitConvert(value float64, bytes bool) string {
+	units := []string{"bps", "Kbps", "Mbps", "Gbps", "Tbps"}
+	if bytes {
+		units = []string{"B", "KB", "MB", "GB", "TB"}
+	} else {
+		value *= 8
+	}
 	index := 0
 	for value >= 1000 && index < len(units)-1 {
 		value /= 1000
 		index++
 	}
-	return strconv.FormatFloat(value, 'f', 2, 64) + " " + units[index]
+	value = math.Round(value*100) / 100
+	return strconv.FormatFloat(value, 'f', -1, 64) + units[index]
+}
+
+func (p *Plugin) lookupIPDetails(ctx context.Context, ip string) (string, string) {
+	if net.ParseIP(strings.TrimSpace(ip)) == nil {
+		return "", ""
+	}
+	var response struct {
+		AS          string `json:"as"`
+		CountryCode string `json:"countryCode"`
+	}
+	result, err := p.services.HTTP.JSON(ctx, httpclient.Request{
+		URL:     "http://ip-api.com/json/" + ip + "?fields=as,countryCode",
+		Timeout: 10 * time.Second,
+	}, &response)
+	if err != nil || result.StatusCode != http.StatusOK {
+		return "", ""
+	}
+	asInfo := ""
+	if fields := strings.Fields(response.AS); len(fields) > 0 {
+		asInfo = fields[0]
+	}
+	code := strings.ToUpper(strings.TrimSpace(response.CountryCode))
+	if len(code) != 2 || code[0] < 'A' || code[0] > 'Z' || code[1] < 'A' || code[1] > 'Z' {
+		return asInfo, ""
+	}
+	return asInfo, string([]rune{
+		rune(127397) + rune(code[0]),
+		rune(127397) + rune(code[1]),
+	})
+}
+
+func (p *Plugin) saveSpeedtestImage(
+	ctx context.Context,
+	resultURL string,
+) (string, func()) {
+	if strings.TrimSpace(resultURL) == "" {
+		return "", nil
+	}
+	response, err := p.services.HTTP.Do(ctx, httpclient.Request{
+		URL:     strings.TrimSpace(resultURL) + ".png",
+		Timeout: 30 * time.Second,
+	})
+	if err != nil || response.StatusCode != http.StatusOK || len(response.Body) == 0 {
+		return "", nil
+	}
+	directory, err := os.MkdirTemp(p.workDir, "result-*")
+	if err != nil {
+		return "", nil
+	}
+	cleanup := func() { _ = os.RemoveAll(directory) }
+	rawPath := filepath.Join(directory, "speedtest.png")
+	if err := os.WriteFile(rawPath, response.Body, 0o600); err != nil {
+		cleanup()
+		return "", nil
+	}
+	filledPath := filepath.Join(directory, "speedtest_filled.png")
+	if err := fillSpeedtestBorder(rawPath, filledPath, 14); err != nil {
+		return rawPath, cleanup
+	}
+	return filledPath, cleanup
+}
+
+func fillSpeedtestBorder(inputPath, outputPath string, border int) error {
+	file, err := os.Open(inputPath)
+	if err != nil {
+		return err
+	}
+	source, _, decodeErr := image.Decode(file)
+	closeErr := file.Close()
+	if err := errors.Join(decodeErr, closeErr); err != nil {
+		return err
+	}
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return errors.New("测速图片尺寸无效")
+	}
+	maxInset := (min(width, height) - 1) / 2
+	inset := max(0, min(border, maxInset))
+	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(
+		canvas,
+		canvas.Bounds(),
+		&image.Uniform{C: color.RGBA{R: 0x21, G: 0x23, B: 0x38, A: 0xff}},
+		image.Point{},
+		draw.Src,
+	)
+	draw.Draw(
+		canvas,
+		image.Rect(inset, inset, width-inset, height-inset),
+		source,
+		image.Pt(bounds.Min.X+inset, bounds.Min.Y+inset),
+		draw.Src,
+	)
+	output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	encoder := png.Encoder{CompressionLevel: png.BestCompression}
+	encodeErr := encoder.Encode(output, canvas)
+	return errors.Join(encodeErr, output.Close())
+}
+
+func (p *Plugin) statusHTML(
+	ctx context.Context,
+	request command.Request,
+	text string,
+) (telegram.SentMessage, error) {
+	if request.Message.Outgoing {
+		return telegram.EditHTML(
+			ctx, p.services.Telegram, request.Message.ChatID, request.Message.ID, text,
+		)
+	}
+	return telegram.ReplyHTML(
+		ctx, p.services.Telegram, request.Message.ChatID, request.Message.ID, text,
+	)
+}
+
+func (p *Plugin) editStatusHTML(
+	ctx context.Context,
+	status telegram.SentMessage,
+	text string,
+) error {
+	_, err := telegram.EditHTML(
+		ctx, p.services.Telegram, status.ChatID, status.MessageID, text,
+	)
+	return err
+}
+
+func (p *Plugin) deleteStatus(ctx context.Context, status telegram.SentMessage) error {
+	if status.MessageID <= 0 {
+		return nil
+	}
+	return p.services.Telegram.DeleteMessages(ctx, status.ChatID, []int{status.MessageID})
 }
 
 func validateServer(server remoteServer) error {
@@ -1184,12 +1515,17 @@ func helpText(prefix string) string {
 		prefix + "sl add <别名> <user@host:port> password <密码>\n" +
 		prefix + "sl add <别名> <user@host:port> key <私钥绝对路径>\n" +
 		prefix + "sl list\n" +
-		prefix + "sl del <序号>\n\n" +
+		prefix + "sl del <序号>\n" +
+		prefix + "sl rename <序号> <新名称>\n\n" +
 		"执行测速：\n" +
 		prefix + "sl（本机）\n" +
 		prefix + "sl <序号>（单台远程）\n" +
 		prefix + "sl 1 3 5（多台远程）\n" +
-		prefix + "sl all（全部）\n\n" +
+		prefix + "sl all（全部）\n" +
+		prefix + "sl all no 2 4（全部但排除 2、4）\n\n" +
+		"测速设置：\n" +
+		prefix + "sl timeout（查看当前超时）\n" +
+		prefix + "sl timeout <10-600>（修改秒数）\n\n" +
 		"备份与恢复：\n" +
 		prefix + "sl backup（备份到收藏夹）\n" +
 		prefix + "sl restore confirm（回复备份文件，会覆盖现有数据）\n\n" +
@@ -1221,12 +1557,18 @@ sudo yum install speedtest</pre>
   示例：<code>{{prefix}}sl add 法兰克福-谷歌 ubuntu@5.6.7.8:22 key /root/.ssh/id_rsa</code>
 • 查看：<code>{{prefix}}sl list</code>
 • 删除：<code>{{prefix}}sl del &lt;序号&gt;</code>
+• 重命名：<code>{{prefix}}sl rename &lt;序号&gt; &lt;新名称&gt;</code>
 
 <b>执行测速</b>
 • 本机：<code>{{prefix}}sl</code>
 • 单台远程：<code>{{prefix}}sl &lt;序号&gt;</code>
 • 多台远程：<code>{{prefix}}sl 1 3 5</code>
 • 全部：<code>{{prefix}}sl all</code>
+• 排除部分：<code>{{prefix}}sl all no 2 4</code>
+
+<b>测速设置</b>
+• 查看超时：<code>{{prefix}}sl timeout</code>
+• 修改超时：<code>{{prefix}}sl timeout &lt;10-600 秒&gt;</code>
 
 <b>备份与恢复</b>
 • 备份：<code>{{prefix}}sl backup</code>（发送到收藏夹）

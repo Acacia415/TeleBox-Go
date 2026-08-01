@@ -175,6 +175,56 @@ func TestAssetSelectorsOnlyIncludeRequestedPlugins(t *testing.T) {
 	}
 }
 
+func TestExtractLegacyAssetsQuarantinesExecutableContent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "backup.tar.gz")
+	writeAssetArchive(t, archivePath, []testArchiveEntry{
+		{
+			header: tar.Header{Name: "telebox/assets/speedlink/servers.db", Mode: 0o600},
+			data:   []byte("SQLite format 3\x00data"),
+		},
+		{
+			header: tar.Header{Name: "telebox/assets/speedlink/speedtest", Mode: 0o600},
+			data:   []byte("\x7fELFbinary"),
+		},
+		{
+			header: tar.Header{Name: "telebox/assets/ytdlp/yt-dlp", Mode: 0o600},
+			data:   []byte("#!/usr/bin/env python3\n"),
+		},
+		{
+			header: tar.Header{Name: "telebox/assets/ai/helper.py", Mode: 0o600},
+			data:   []byte("print('old code')\n"),
+		},
+	})
+	destination := filepath.Join(root, "assets")
+	result, err := ExtractLegacyAssets(
+		archivePath,
+		destination,
+		[]string{"ai", "speedlink", "yt-dlp"},
+		"source",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Files != 1 || result.QuarantinedFiles != 3 {
+		t.Fatalf("asset extraction = %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "speedlink", "servers.db")); err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []string{
+		filepath.Join("speedlink", "speedtest"),
+		filepath.Join("ytdlp", "yt-dlp"),
+		filepath.Join("ai", "helper.py"),
+	} {
+		if _, err := os.Stat(filepath.Join(destination, relative)); !os.IsNotExist(err) {
+			t.Fatalf("unsafe asset %q was activated: %v", relative, err)
+		}
+	}
+}
+
 func TestConvertRejectsOverlappingAssetPaths(t *testing.T) {
 	t.Parallel()
 
@@ -286,7 +336,9 @@ func writeAssetArchive(t *testing.T, target string, entries []testArchiveEntry) 
 		if header.Typeflag == 0 {
 			header.Typeflag = tar.TypeReg
 		}
-		header.Mode = 0o700
+		if header.Mode == 0 {
+			header.Mode = 0o700
+		}
 		header.Size = int64(len(entry.data))
 		if err := archive.WriteHeader(&header); err != nil {
 			t.Fatal(err)

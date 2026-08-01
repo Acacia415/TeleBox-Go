@@ -237,6 +237,7 @@ type Upload struct {
 	FileName     string
 	MIMEType     string
 	Caption      string
+	CaptionHTML  bool
 	ReplyToID    int
 	Kind         MediaKind
 	Width        int

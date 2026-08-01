@@ -25,9 +25,11 @@ type ImportOptions struct {
 }
 
 type ImportStats struct {
-	CopiedFiles  int   `json:"copied_files"`
-	SkippedFiles int   `json:"skipped_files"`
-	CopiedBytes  int64 `json:"copied_bytes"`
+	CopiedFiles      int   `json:"copied_files"`
+	SkippedFiles     int   `json:"skipped_files"`
+	CopiedBytes      int64 `json:"copied_bytes"`
+	QuarantinedFiles int   `json:"quarantined_files,omitempty"`
+	QuarantinedBytes int64 `json:"quarantined_bytes,omitempty"`
 }
 
 type ImportResult struct {
@@ -107,13 +109,14 @@ func ImportConverted(options ImportOptions) (ImportResult, error) {
 			return ImportResult{}, fmt.Errorf("import session: %w", err)
 		}
 	}
-	result.Assets, err = importTree(layout.assets, options.AssetsPath)
+	result.Assets, err = importTree(layout.assets, options.AssetsPath, true)
 	if err != nil {
 		return ImportResult{}, fmt.Errorf("import assets: %w", err)
 	}
 	result.LegacyAssets, err = importTree(
 		layout.legacyAssets,
 		options.LegacyAssetsPath,
+		false,
 	)
 	if err != nil {
 		return ImportResult{}, fmt.Errorf("import legacy assets: %w", err)
@@ -286,7 +289,7 @@ func validSHA256(value string) bool {
 	return err == nil && len(decoded) == 32
 }
 
-func importTree(source, destination string) (ImportStats, error) {
+func importTree(source, destination string, filterExecutable bool) (ImportStats, error) {
 	if err := requireDirectory(source); err != nil {
 		return ImportStats{}, err
 	}
@@ -329,6 +332,17 @@ func importTree(source, destination string) (ImportStats, error) {
 			sourceBytes > maxAssetTotalSize {
 			return fmt.Errorf("source asset limits exceeded at %q", relative)
 		}
+		if filterExecutable {
+			prefix, err := readFilePrefix(path, info.Size())
+			if err != nil {
+				return err
+			}
+			if unsafeActiveAsset(filepath.ToSlash(relative), int64(info.Mode().Perm()), prefix) {
+				result.QuarantinedFiles++
+				result.QuarantinedBytes += info.Size()
+				return nil
+			}
+		}
 		fileResult, err := importFile(path, target, maxAssetFileSize)
 		if err != nil {
 			return fmt.Errorf("copy %q: %w", relative, err)
@@ -339,6 +353,15 @@ func importTree(source, destination string) (ImportStats, error) {
 		return nil
 	})
 	return result, err
+}
+
+func readFilePrefix(path string, size int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readAssetPrefix(file, size)
 }
 
 func importFile(source, destination string, maxSize int64) (ImportStats, error) {
