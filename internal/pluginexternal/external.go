@@ -162,6 +162,20 @@ func (p *External) ListensToMessages() bool {
 	return p.installed.Manifest.Listens
 }
 
+func (p *External) OnEditedMessage(
+	ctx context.Context,
+	message telegram.Message,
+) error {
+	if !p.installed.Manifest.ListensEdits {
+		return nil
+	}
+	return p.call(ctx, pluginbridge.MethodPluginEditedMessage, message, nil)
+}
+
+func (p *External) ListensToEditedMessages() bool {
+	return p.installed.Manifest.ListensEdits
+}
+
 func (p *External) call(
 	ctx context.Context,
 	method string,

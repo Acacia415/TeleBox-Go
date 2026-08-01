@@ -194,6 +194,26 @@ func (r *Registry) MessageListeners() []Listener {
 	return result
 }
 
+func (r *Registry) EditedMessageListeners() []EditedListener {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]EditedListener, 0)
+	for _, name := range r.order {
+		item := r.entries[name]
+		if !item.enabled {
+			continue
+		}
+		if listener, ok := item.plugin.(EditedMessageListener); ok {
+			if conditional, ok := listener.(ConditionalEditedMessageListener); ok &&
+				!conditional.ListensToEditedMessages() {
+				continue
+			}
+			result = append(result, EditedListener{Plugin: name, Handler: listener})
+		}
+	}
+	return result
+}
+
 func (r *Registry) removeFromOrder(name string) {
 	for index, item := range r.order {
 		if item == name {

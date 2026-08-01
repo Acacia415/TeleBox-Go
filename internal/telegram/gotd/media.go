@@ -428,6 +428,7 @@ func stableMessage(raw *tg.Message, chatID, selfID int64) teleboxtelegram.Messag
 		}
 	}
 	groupedID, _ := raw.GetGroupedID()
+	viaBotID, _ := raw.GetViaBotID()
 	customEmojiIDs := make([]int64, 0)
 	for _, entity := range raw.Entities {
 		if custom, ok := entity.(*tg.MessageEntityCustomEmoji); ok {
@@ -447,6 +448,7 @@ func stableMessage(raw *tg.Message, chatID, selfID int64) teleboxtelegram.Messag
 		Text:            raw.Message,
 		Entities:        portableMessageEntities(raw.Entities),
 		Outgoing:        outgoing,
+		ViaBotID:        viaBotID,
 		Date:            time.Unix(int64(raw.Date), 0),
 		GroupedID:       groupedID,
 		Media:           mediaMetadataFromMessage(raw),

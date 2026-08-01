@@ -47,3 +47,30 @@ func TestCatalogSelectsPlatformArtifact(t *testing.T) {
 		t.Fatalf("ArtifactFor() = %+v, %t", artifact, ok)
 	}
 }
+
+func TestCatalogRejectsInvalidMinimumHost(t *testing.T) {
+	t.Parallel()
+
+	catalog := Catalog{
+		SchemaVersion: CatalogSchemaVersion,
+		Plugins: []CatalogPlugin{{
+			Name:        "example",
+			Description: "Example",
+			Releases: []PluginRelease{{
+				Version: "1.0.0",
+				MinHost: "not-a-version",
+				Artifacts: []Artifact{{
+					OS:     "linux",
+					Arch:   "amd64",
+					URL:    "https://example.com/plugin.zip",
+					SHA256: strings.Repeat("a", 64),
+					Format: "zip",
+				}},
+			}},
+		}},
+	}
+	if err := catalog.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "minimum host") {
+		t.Fatalf("Catalog.Validate() error = %v", err)
+	}
+}

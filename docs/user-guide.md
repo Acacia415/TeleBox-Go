@@ -304,6 +304,81 @@ journalctl --user -u telebox.service -f
 插件包从项目的 GitHub Release 下载，并检查 HTTPS、文件大小和
 SHA-256。插件在独立子进程中运行，单个插件退出不会直接带停主程序。
 
+### PMCaptcha 私聊验证
+
+安装并查看说明：
+
+```text
+-p i pmcaptcha
+-help pmcaptcha
+-pmcaptcha status
+-pmcaptcha settings
+```
+
+默认使用本地数学题验证陌生人。切换验证方式：
+
+```text
+-pmcaptcha type math
+-pmcaptcha type sticker
+-pmcaptcha type img
+-pmcaptcha timeout 30 math
+-pmcaptcha timeout off sticker
+```
+
+图片模式使用原插件所用的 `@PagerMaid_Sam_Bot` 内联结果，只有手动选择
+`img` 时才启用，验证消息会发送给该机器人；机器人不可用时自动回退到数学
+验证。常用过滤和失败处理：
+
+```text
+-pmcaptcha whitelist 订单,售后
+-pmcaptcha blacklist 推广,投资
+-pmcaptcha premium allow
+-pmcaptcha groups 2
+-pmcaptcha history 5
+-pmcaptcha action ban
+-pmcaptcha report on
+```
+
+反洪水默认在一分钟内出现 5 个陌生用户时启动全局自动归档，并在连续
+5 分钟没有新陌生私聊后结束：
+
+```text
+-pmcaptcha flood 5
+-pmcaptcha flood_act delete
+-pmcaptcha flood_username on confirm
+```
+
+用户名保护会在洪水期间临时把公开用户名转移到临时频道，结束后恢复并
+删除频道，因此开启时必须显式追加 `confirm`。
+
+自定义规则不执行代码，只支持受限表达式。命中规则后跳过后续验证：
+
+```text
+-pmcaptcha custom_rule contains(text, "订单") && user.premium
+-pmcaptcha custom_rule user.id == 123456
+-pmcaptcha custom_rule -c
+```
+
+可用字段和函数以 `-pmcaptcha help custom_rule` 为准。原 Python 插件中的
+任意 `exec` 规则不会直接执行。
+
+备份和恢复设置：
+
+```text
+-pmcaptcha export_settings
+-pmcaptcha import_settings
+-pmcaptcha web
+-pmcaptcha web <配置码>
+```
+
+`import_settings` 需要回复导出的 JSON 文件。`web` 只是兼容原命令名称，
+Go 版会在本机生成配置码，不会把配置放入外部网址。
+原 Python 插件导出的 `.pmc-settings.json` 也可以直接导入；不安全的任意
+代码规则不会执行，导入结果会明确提示被跳过的项目。
+
+Go 版没有原插件的第三方日志上报、固定开发者放行 ID 和远程语言脚本
+执行。`collect_logs on` 只增加本机 TeleBox-Go 日志详情，默认关闭。
+
 ## 10. 更新 TeleBox-Go
 
 ### 在 Telegram 中更新框架

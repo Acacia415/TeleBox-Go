@@ -59,6 +59,19 @@ func TestSanitizeText(t *testing.T) {
 			wantChange: false,
 		},
 		{
+			name:       "success label containing failure",
+			input:      "✅ 验证失败处理：none",
+			want:       "✅ 验证失败处理：none",
+			wantChange: false,
+		},
+		{
+			name: "settings labels containing failure",
+			input: "⚙️ PMCaptcha 设置\n\n" +
+				"失败处理：none\n失败后举报：关闭",
+			want:       "失败处理：none",
+			wantChange: false,
+		},
+		{
 			name:       "unknown English library error",
 			input:      "❌ 处理失败：provider returned an opaque failure",
 			want:       "❌ 处理失败：操作未完成，请查看服务日志",

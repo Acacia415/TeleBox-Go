@@ -82,6 +82,9 @@ func Generate(ctx context.Context, options Options) (Result, error) {
 		release := pluginapi.PluginRelease{
 			MinHost: strings.TrimSpace(options.MinimumHost),
 		}
+		if strings.TrimSpace(specification.MinHost) != "" {
+			release.MinHost = strings.TrimSpace(specification.MinHost)
+		}
 		for _, platform := range options.Platforms {
 			buildDir := filepath.Join(
 				staging,

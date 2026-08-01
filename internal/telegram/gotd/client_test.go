@@ -67,6 +67,73 @@ func TestPeerIDUsesTDLibConvention(t *testing.T) {
 	}
 }
 
+func TestCachedInputUserKeepsAccessHash(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{peerCache: map[int64]tg.InputPeerClass{
+		42: &tg.InputPeerUser{UserID: 42, AccessHash: 4200},
+	}}
+	input, ok := client.cachedInputUser(42)
+	if !ok {
+		t.Fatal("cachedInputUser() did not find the update entity")
+	}
+	user, ok := input.(*tg.InputUser)
+	if !ok || user.UserID != 42 || user.AccessHash != 4200 {
+		t.Fatalf("cachedInputUser() = %#v, want user 42 with access hash 4200", input)
+	}
+}
+
+func TestResolvePrivateUserUsesCachedPeer(t *testing.T) {
+	t.Parallel()
+
+	want := &tg.InputPeerUser{UserID: 42, AccessHash: 4200}
+	client := &Client{peerCache: map[int64]tg.InputPeerClass{42: want}}
+	got, err := client.resolvePrivateUser(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("resolvePrivateUser() = %#v, want cached peer %#v", got, want)
+	}
+}
+
+func TestHandleMessageUsesCachedPeerWhenUpdateOmitsEntities(t *testing.T) {
+	t.Parallel()
+
+	received := make(chan teleboxtelegram.Message, 1)
+	client := &Client{
+		peerCache: map[int64]tg.InputPeerClass{
+			42: &tg.InputPeerUser{UserID: 42, AccessHash: 4200},
+		},
+		handler: func(_ context.Context, message teleboxtelegram.Message) error {
+			received <- message
+			return nil
+		},
+	}
+	raw := &tg.Message{
+		ID:      7,
+		PeerID:  &tg.PeerUser{UserID: 42},
+		FromID:  &tg.PeerUser{UserID: 42},
+		Message: "12",
+	}
+	if err := client.handleMessage(
+		context.Background(),
+		tg.Entities{},
+		raw,
+		false,
+	); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case message := <-received:
+		if message.ChatID != 42 || message.SenderID != 42 || message.Text != "12" {
+			t.Fatalf("received message = %+v", message)
+		}
+	default:
+		t.Fatal("cached repeated private message was not delivered")
+	}
+}
+
 func TestDeviceAppVersion(t *testing.T) {
 	t.Parallel()
 

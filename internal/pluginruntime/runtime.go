@@ -158,6 +158,22 @@ func (r *runtimeState) handle(
 			return nil, errors.New("plugin does not listen to messages")
 		}
 		return nil, listener.OnMessage(ctx, message)
+	case pluginbridge.MethodPluginEditedMessage:
+		var message telegram.Message
+		if err := json.Unmarshal(raw, &message); err != nil {
+			return nil, err
+		}
+		r.mu.Lock()
+		started := r.started
+		r.mu.Unlock()
+		if !started {
+			return nil, errors.New("plugin is not started")
+		}
+		listener, ok := r.plugin.(plugin.EditedMessageListener)
+		if !ok {
+			return nil, errors.New("plugin does not listen to edited messages")
+		}
+		return nil, listener.OnEditedMessage(ctx, message)
 	default:
 		return nil, &pluginrpc.RemoteError{
 			Code:    "method_not_found",

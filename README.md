@@ -19,11 +19,13 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 - [ ] 其余未移植插件业务数据库的逐插件转换（原文件已完整保留）
 - [ ] Linux 隔离账号端到端验收
 
-本仓库只提供全量备份中实际安装过的插件：
+本仓库提供全量备份中实际安装过的插件，以及后来单独确认迁移的
+`pmcaptcha` 私聊验证插件：
 
 - 查询与工具：`bin`、`convert`、`dc`、`dig`、`ids`、`ip`、`isalive`、
   `jointime`、`rate`、`search`、`trace`
 - 消息与管理：`aban`、`bulk_delete`、`cezi`、`re`
+- 隐私与防护：`pmcaptcha`
 - 媒体与贴纸：`eat`、`eatgif`、`gif`、`nsticker`、`yvlu`、`zhijiao`
 - AI 与下载：`ai`、`yt-dlp`
 - 系统与备份：`speedlink`、`telegram-backup`
@@ -146,6 +148,19 @@ Release 中的 Linux 插件 ZIP 是按需安装和独立更新所必需的，不
 `yt-dlp` 可以通过 `-yt setup` 自动安装并校验上游程序，通过
 `-yt doctor` 检查 Deno、FFmpeg、Cookies 和代理。音视频转换等插件仍需要
 系统中存在相应的上游命令行工具。
+
+陌生人私聊验证插件按需安装：
+
+```text
+-p i pmcaptcha
+-pmcaptcha status
+-help pmcaptcha
+```
+
+`pmcaptcha` 默认使用本地数学验证；贴纸和图片模式需手动选择。图片模式
+会调用原插件使用的 `@PagerMaid_Sam_Bot`，启用时会在 Telegram 内再次说明。
+Go 版不包含原插件的第三方日志上报、硬编码放行用户、远程语言脚本执行或
+任意 Python 规则执行；自定义规则改为受限表达式，配置码只在本机生成。
 
 框架备份可直接在 Telegram 中完成。`-bf` 备份插件与运行数据，`-bf all`
 另外包含 JSON 配置；回复备份文件发送 `-hf` 会先完整校验，重启后再恢复。

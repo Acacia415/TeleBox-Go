@@ -391,14 +391,25 @@ func failureDelimiterEnd(text string, limit int) int {
 	tail := before[keywordEnd:]
 	chinese := strings.Index(tail, "：")
 	ascii := strings.Index(tail, ":")
+	delimiter := -1
 	switch {
 	case chinese >= 0 && (ascii < 0 || chinese < ascii):
-		return keywordEnd + chinese + len("：")
+		delimiter = chinese
 	case ascii >= 0:
-		return keywordEnd + ascii + 1
+		delimiter = ascii
 	default:
 		return -1
 	}
+	// The delimiter must immediately follow the failure keyword. Otherwise a
+	// normal setting label such as "验证失败处理：none" would be mistaken
+	// for an error whose technical detail happens to be the English word none.
+	if strings.TrimSpace(tail[:delimiter]) != "" {
+		return -1
+	}
+	if delimiter == chinese {
+		return keywordEnd + delimiter + len("：")
+	}
+	return keywordEnd + delimiter + 1
 }
 
 func extractErrorCode(raw string) string {

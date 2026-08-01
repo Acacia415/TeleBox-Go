@@ -16,6 +16,17 @@ type fakePlugin struct {
 	startError error
 }
 
+type fakeEditedPlugin struct {
+	fakePlugin
+}
+
+func (*fakeEditedPlugin) OnEditedMessage(
+	context.Context,
+	telegram.Message,
+) error {
+	return nil
+}
+
 func (p *fakePlugin) Metadata() Metadata {
 	return Metadata{Name: p.name, Version: "test"}
 }
@@ -117,5 +128,31 @@ func TestRegistryRemove(t *testing.T) {
 	}
 	if err := registry.Remove(context.Background(), "core"); err == nil {
 		t.Fatal("Remove(core) error = nil")
+	}
+}
+
+func TestRegistryKeepsEditedListenersSeparate(t *testing.T) {
+	t.Parallel()
+
+	router, err := command.NewRouter([]string{"-"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(router)
+	candidate := &fakeEditedPlugin{
+		fakePlugin: fakePlugin{name: "edited"},
+	}
+	if err := registry.Add(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Enable(context.Background(), "edited"); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.MessageListeners(); len(got) != 0 {
+		t.Fatalf("ordinary listeners = %+v, want none", got)
+	}
+	got := registry.EditedMessageListeners()
+	if len(got) != 1 || got[0].Plugin != "edited" {
+		t.Fatalf("edited listeners = %+v", got)
 	}
 }

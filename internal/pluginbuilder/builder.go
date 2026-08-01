@@ -39,11 +39,12 @@ type Result struct {
 }
 
 type inspection struct {
-	Name        string              `json:"name"`
-	Version     string              `json:"version"`
-	Description string              `json:"description"`
-	Commands    []pluginapi.Command `json:"commands"`
-	Listens     bool                `json:"listens"`
+	Name         string              `json:"name"`
+	Version      string              `json:"version"`
+	Description  string              `json:"description"`
+	Commands     []pluginapi.Command `json:"commands"`
+	Listens      bool                `json:"listens"`
+	ListensEdits bool                `json:"listens_edits"`
 }
 
 func Build(ctx context.Context, options Options) (Result, error) {
@@ -130,6 +131,7 @@ func Build(ctx context.Context, options Options) (Result, error) {
 		Executable:    executableName,
 		Commands:      metadata.Commands,
 		Listens:       metadata.Listens,
+		ListensEdits:  metadata.ListensEdits,
 		Permissions:   permissions,
 		Homepage:      "https://github.com/Acacia415/TeleBox-Go",
 	}
@@ -325,18 +327,27 @@ func main() {
 			listens = conditional.ListensToMessages()
 		}
 	}
+	listensEdits := false
+	if listener, ok := any(candidate).(plugin.EditedMessageListener); ok {
+		listensEdits = listener != nil
+		if conditional, ok := any(candidate).(plugin.ConditionalEditedMessageListener); ok {
+			listensEdits = conditional.ListensToEditedMessages()
+		}
+	}
 	_ = json.NewEncoder(os.Stdout).Encode(struct {
 		Name string `+"`json:\"name\"`"+`
 		Version string `+"`json:\"version\"`"+`
 		Description string `+"`json:\"description\"`"+`
 		Commands []pluginapi.Command `+"`json:\"commands\"`"+`
 		Listens bool `+"`json:\"listens\"`"+`
+		ListensEdits bool `+"`json:\"listens_edits\"`"+`
 	}{
 		Name: metadata.Name,
 		Version: metadata.Version,
 		Description: metadata.Description,
 		Commands: commands,
 		Listens: listens,
+		ListensEdits: listensEdits,
 	})
 }
 `, specification.Package, specification.Constructor)

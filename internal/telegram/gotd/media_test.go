@@ -100,6 +100,7 @@ func TestStableMessageIncludesPortableMediaAndReply(t *testing.T) {
 	})
 	raw.SetReplyTo(reply)
 	raw.SetGroupedID(99)
+	raw.SetViaBotID(12345)
 	raw.Entities = []tg.MessageEntityClass{
 		&tg.MessageEntityBold{Offset: 0, Length: 7},
 		&tg.MessageEntityTextURL{
@@ -123,6 +124,9 @@ func TestStableMessageIncludesPortableMediaAndReply(t *testing.T) {
 	got := stableMessage(raw, -1000000000005, 77)
 	if got.SenderID != 77 || got.ReplyToID != 9 || got.GroupedID != 99 {
 		t.Fatalf("stableMessage() = %+v", got)
+	}
+	if got.ViaBotID != 12345 {
+		t.Fatalf("stableMessage().ViaBotID = %d, want 12345", got.ViaBotID)
 	}
 	if got.Media == nil || got.Media.Kind != teleboxtelegram.MediaVoice ||
 		got.Media.Duration != 3*time.Second {

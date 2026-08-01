@@ -125,6 +125,23 @@ func TestExtractRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestEnsureHostCompatibility(t *testing.T) {
+	t.Parallel()
+
+	if err := ensureHostCompatibility("0.7.0", "0.7.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureHostCompatibility("v0.8.1", "0.7.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureHostCompatibility("dev", "0.7.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureHostCompatibility("0.6.2", "0.7.0"); err == nil {
+		t.Fatal("old host accepted a newer plugin API")
+	}
+}
+
 func TestInstalledKeepsValidPluginsWhenOneIsCorrupt(t *testing.T) {
 	t.Parallel()
 

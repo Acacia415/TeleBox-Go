@@ -19,7 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Acacia415/TeleBox-Go/internal/buildinfo"
 	"github.com/Acacia415/TeleBox-Go/pkg/pluginapi"
+	"golang.org/x/mod/semver"
 )
 
 const maxCatalogBytes = 2 << 20
@@ -235,6 +237,9 @@ func (m *Manager) Install(
 			version,
 		)
 	}
+	if err := ensureHostCompatibility(buildinfo.Version, release.MinHost); err != nil {
+		return InstallResult{}, fmt.Errorf("plugin %q: %w", name, err)
+	}
 	artifact, exists := release.ArtifactFor(m.goos, m.goarch)
 	if !exists {
 		return InstallResult{}, fmt.Errorf(
@@ -332,6 +337,49 @@ func (m *Manager) Install(
 		Previous:  previous,
 		Updated:   previous != "" && previous != installed.Manifest.Version,
 	}, nil
+}
+
+func ensureHostCompatibility(current, minimum string) error {
+	minimumRaw := strings.TrimSpace(minimum)
+	if minimumRaw == "" {
+		return nil
+	}
+	minimum = normalizedSemver(minimumRaw)
+	if minimum == "" {
+		return fmt.Errorf("插件目录中的最低框架版本 %q 无效", minimumRaw)
+	}
+	// Development builds are used by the source tree and plugin builder. They
+	// contain the API under test and must not be rejected as an old release.
+	if strings.EqualFold(strings.TrimSpace(current), "dev") {
+		return nil
+	}
+	currentRaw := strings.TrimSpace(current)
+	current = normalizedSemver(currentRaw)
+	if current == "" {
+		return fmt.Errorf("无法识别当前 TeleBox-Go 版本 %q", currentRaw)
+	}
+	if semver.Compare(current, minimum) < 0 {
+		return fmt.Errorf(
+			"需要 TeleBox-Go %s 或更新版本，当前版本为 %s",
+			minimum,
+			current,
+		)
+	}
+	return nil
+}
+
+func normalizedSemver(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "dev") {
+		return ""
+	}
+	if !strings.HasPrefix(value, "v") {
+		value = "v" + value
+	}
+	if !semver.IsValid(value) {
+		return ""
+	}
+	return value
 }
 
 func (m *Manager) Remove(name string) (Installed, error) {

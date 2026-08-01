@@ -31,9 +31,25 @@ type ConditionalMessageListener interface {
 	ListensToMessages() bool
 }
 
+// EditedMessageListener is opt-in because most ordinary listeners must not
+// process the same message again after Telegram reports an edit.
+type EditedMessageListener interface {
+	OnEditedMessage(context.Context, telegram.Message) error
+}
+
+type ConditionalEditedMessageListener interface {
+	EditedMessageListener
+	ListensToEditedMessages() bool
+}
+
 type Listener struct {
 	Plugin  string
 	Handler MessageListener
+}
+
+type EditedListener struct {
+	Plugin  string
+	Handler EditedMessageListener
 }
 
 type Status struct {

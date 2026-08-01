@@ -38,6 +38,9 @@ func (c *Client) ResolveUser(ctx context.Context, target string) (teleboxtelegra
 		if userID <= 0 {
 			return teleboxtelegram.User{}, errors.New("user ID must be greater than zero")
 		}
+		if input, ok := c.cachedInputUser(userID); ok {
+			return c.resolveInputUser(ctx, userID, input)
+		}
 		resolved, err = c.peers.ResolveUserID(ctx, userID)
 		if err != nil {
 			return teleboxtelegram.User{}, fmt.Errorf("resolve user ID %d: %w", userID, err)
@@ -59,14 +62,78 @@ func (c *Client) ResolveUser(ctx context.Context, target string) (teleboxtelegra
 	c.peerCache[int64(resolved.TDLibPeerID())] = resolved.InputPeer()
 	c.mu.Unlock()
 	result := portableUser(raw)
-	full, err := c.raw.API().UsersGetFullUser(ctx, resolved.InputUser())
+	fillFullUser(ctx, c.raw.API(), resolved.InputUser(), &result)
+	return result, nil
+}
+
+func (c *Client) cachedInputUser(userID int64) (tg.InputUserClass, bool) {
+	c.mu.RLock()
+	peer, ok := c.peerCache[userID]
+	c.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	switch value := peer.(type) {
+	case *tg.InputPeerUser:
+		return &tg.InputUser{
+			UserID:     value.UserID,
+			AccessHash: value.AccessHash,
+		}, true
+	case *tg.InputPeerSelf:
+		return &tg.InputUserSelf{}, true
+	default:
+		return nil, false
+	}
+}
+
+func (c *Client) resolveInputUser(
+	ctx context.Context,
+	userID int64,
+	input tg.InputUserClass,
+) (teleboxtelegram.User, error) {
+	users, err := c.raw.API().UsersGetUsers(ctx, []tg.InputUserClass{input})
+	if err != nil {
+		return teleboxtelegram.User{}, fmt.Errorf(
+			"resolve cached user ID %d: %w",
+			userID,
+			err,
+		)
+	}
+	if len(users) == 0 {
+		return teleboxtelegram.User{}, fmt.Errorf(
+			"resolve cached user ID %d: Telegram returned no user",
+			userID,
+		)
+	}
+	raw, ok := users[0].AsNotEmpty()
+	if !ok {
+		return teleboxtelegram.User{}, fmt.Errorf(
+			"resolve cached user ID %d: Telegram returned an empty user",
+			userID,
+		)
+	}
+	result := portableUser(raw)
+	fillFullUser(ctx, c.raw.API(), input, &result)
+	return result, nil
+}
+
+type fullUserAPI interface {
+	UsersGetFullUser(context.Context, tg.InputUserClass) (*tg.UsersUserFull, error)
+}
+
+func fillFullUser(
+	ctx context.Context,
+	api fullUserAPI,
+	input tg.InputUserClass,
+	result *teleboxtelegram.User,
+) {
+	full, err := api.UsersGetFullUser(ctx, input)
 	if err == nil {
 		if about, ok := full.FullUser.GetAbout(); ok {
 			result.Bio = about
 		}
 		result.CommonChats = full.FullUser.CommonChatsCount
 	}
-	return result, nil
 }
 
 func (c *Client) ResolveChat(ctx context.Context, chatID int64) (teleboxtelegram.Chat, error) {
@@ -242,18 +309,21 @@ func portableChannel(raw *tg.Channel, chatID int64) teleboxtelegram.Chat {
 
 func portableUser(raw *tg.User) teleboxtelegram.User {
 	result := teleboxtelegram.User{
-		ID:        raw.ID,
-		FirstName: raw.FirstName,
-		LastName:  raw.LastName,
-		Username:  raw.Username,
-		Phone:     raw.Phone,
-		Deleted:   raw.Deleted,
-		Bot:       raw.Bot,
-		Premium:   raw.Premium,
-		Verified:  raw.Verified,
-		Scam:      raw.Scam,
-		Fake:      raw.Fake,
-		Presence:  teleboxtelegram.PresenceUnknown,
+		ID:            raw.ID,
+		FirstName:     raw.FirstName,
+		LastName:      raw.LastName,
+		Username:      raw.Username,
+		Phone:         raw.Phone,
+		LanguageCode:  raw.LangCode,
+		Contact:       raw.Contact,
+		MutualContact: raw.MutualContact,
+		Deleted:       raw.Deleted,
+		Bot:           raw.Bot,
+		Premium:       raw.Premium,
+		Verified:      raw.Verified,
+		Scam:          raw.Scam,
+		Fake:          raw.Fake,
+		Presence:      teleboxtelegram.PresenceUnknown,
 	}
 	if photo, ok := raw.Photo.(*tg.UserProfilePhoto); ok {
 		result.PhotoDC = photo.DCID
