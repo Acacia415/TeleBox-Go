@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 const CatalogSchemaVersion = 1
@@ -90,6 +92,15 @@ func (c Catalog) Validate() error {
 					release.Version,
 				))
 			}
+			if minimum := normalizeVersion(release.MinHost); minimum != "" &&
+				!semver.IsValid(minimum) {
+				problems = append(problems, fmt.Errorf(
+					"plugin %q release %q has invalid minimum host %q",
+					item.Name,
+					release.Version,
+					release.MinHost,
+				))
+			}
 			for _, artifact := range release.Artifacts {
 				if err := artifact.Validate(); err != nil {
 					problems = append(problems, fmt.Errorf(
@@ -103,6 +114,17 @@ func (c Catalog) Validate() error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+func normalizeVersion(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, "v") {
+		value = "v" + value
+	}
+	return value
 }
 
 func (a Artifact) Validate() error {

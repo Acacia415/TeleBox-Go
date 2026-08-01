@@ -117,6 +117,57 @@ func (c *UnavailableClient) DeleteUserHistory(context.Context, int64, int64) err
 	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
 }
 
+func (c *UnavailableClient) BlockUser(context.Context, int64) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) UnblockUser(context.Context, int64) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) ReportSpam(context.Context, int64) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) DeletePrivateHistory(context.Context, int64) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) GetPrivateChatSettings(
+	context.Context,
+	int64,
+) (PrivateChatSettings, error) {
+	return PrivateChatSettings{}, fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) SetPrivateChatQuarantined(context.Context, int64, bool) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) GetGlobalAutoArchive(context.Context) (bool, error) {
+	return false, fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) SetGlobalAutoArchive(context.Context, bool) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) UpdateAccountUsername(context.Context, string) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) CreateChannel(context.Context, string, string) (Chat, error) {
+	return Chat{}, fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) UpdateChatUsername(context.Context, int64, string) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) DeleteChannel(context.Context, int64) error {
+	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
 func (c *UnavailableClient) SendReaction(context.Context, int64, int, []Reaction, bool) error {
 	return fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
 }
@@ -141,4 +192,11 @@ func (c *UnavailableClient) AddStickerToSet(context.Context, string, Sticker) er
 
 func (c *UnavailableClient) RequestBotMedia(context.Context, BotMediaRequest) (Message, error) {
 	return Message{}, fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
+}
+
+func (c *UnavailableClient) SendInlineBotResult(
+	context.Context,
+	InlineBotRequest,
+) (SentMessage, error) {
+	return SentMessage{}, fmt.Errorf("%w: %s", ErrTransportUnavailable, c.reason)
 }

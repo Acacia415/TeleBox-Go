@@ -21,6 +21,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/plugins/isalive"
 	"github.com/Acacia415/TeleBox-Go/plugins/jointime"
 	"github.com/Acacia415/TeleBox-Go/plugins/nsticker"
+	"github.com/Acacia415/TeleBox-Go/plugins/pmcaptcha"
 	"github.com/Acacia415/TeleBox-Go/plugins/rate"
 	repeatplugin "github.com/Acacia415/TeleBox-Go/plugins/repeat"
 	"github.com/Acacia415/TeleBox-Go/plugins/search"
@@ -55,6 +56,7 @@ func TestEveryBusinessPluginProvidesDetailedHelp(t *testing.T) {
 		"isalive":         isalive.New(services),
 		"jointime":        jointime.New(services),
 		"nsticker":        nsticker.New(services),
+		"pmcaptcha":       pmcaptcha.New(services),
 		"rate":            rate.New(services),
 		"re":              repeatplugin.New(services),
 		"search":          search.New(services),

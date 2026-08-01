@@ -13,6 +13,7 @@ type Spec struct {
 	Package     string
 	Constructor string
 	SourceDir   string
+	MinHost     string
 }
 
 var catalog = []Spec{
@@ -32,6 +33,7 @@ var catalog = []Spec{
 	{Name: "isalive", Package: modulePath + "/plugins/isalive", Constructor: "New", SourceDir: "plugins/isalive"},
 	{Name: "jointime", Package: modulePath + "/plugins/jointime", Constructor: "New", SourceDir: "plugins/jointime"},
 	{Name: "nsticker", Package: modulePath + "/plugins/nsticker", Constructor: "New", SourceDir: "plugins/nsticker"},
+	{Name: "pmcaptcha", Package: modulePath + "/plugins/pmcaptcha", Constructor: "New", SourceDir: "plugins/pmcaptcha", MinHost: "0.7.0"},
 	{Name: "rate", Package: modulePath + "/plugins/rate", Constructor: "New", SourceDir: "plugins/rate"},
 	{Name: "re", Package: modulePath + "/plugins/repeat", Constructor: "New", SourceDir: "plugins/repeat"},
 	{Name: "search", Package: modulePath + "/plugins/search", Constructor: "New", SourceDir: "plugins/search"},

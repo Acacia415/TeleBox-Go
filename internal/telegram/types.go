@@ -54,23 +54,26 @@ const (
 )
 
 type User struct {
-	ID          int64
-	FirstName   string
-	LastName    string
-	Username    string
-	EmojiStatus int64
-	Phone       string
-	Bio         string
-	CommonChats int
-	Deleted     bool
-	Bot         bool
-	Premium     bool
-	Verified    bool
-	Scam        bool
-	Fake        bool
-	PhotoDC     int
-	Presence    Presence
-	LastSeen    time.Time
+	ID            int64
+	FirstName     string
+	LastName      string
+	Username      string
+	EmojiStatus   int64
+	Phone         string
+	Bio           string
+	LanguageCode  string
+	CommonChats   int
+	Contact       bool
+	MutualContact bool
+	Deleted       bool
+	Bot           bool
+	Premium       bool
+	Verified      bool
+	Scam          bool
+	Fake          bool
+	PhotoDC       int
+	Presence      Presence
+	LastSeen      time.Time
 }
 
 type ChatKind string
@@ -102,6 +105,11 @@ type Chat struct {
 type ChatPermissions struct {
 	DeleteMessages bool
 	BanUsers       bool
+}
+
+type PrivateChatSettings struct {
+	CanReportSpam bool
+	AutoArchived  bool
 }
 
 type HistoryQuery struct {
@@ -176,6 +184,17 @@ type BotMediaRequest struct {
 	Timeout time.Duration
 }
 
+// InlineBotRequest asks an inline bot for results and sends the first result
+// into the requested chat. It is intentionally narrower than the raw MTProto
+// methods so plugins cannot submit arbitrary inline result identifiers.
+type InlineBotRequest struct {
+	Bot       string
+	Query     string
+	ChatID    int64
+	ReplyToID int
+	Silent    bool
+}
+
 type MessageEntity struct {
 	Type       string
 	Offset     int
@@ -197,6 +216,8 @@ type Message struct {
 	Text            string
 	Entities        []MessageEntity
 	Outgoing        bool
+	Edited          bool
+	ViaBotID        int64
 	Date            time.Time
 	GroupedID       int64
 	Media           *Media
@@ -256,9 +277,22 @@ type Client interface {
 	JoinChat(context.Context, string) error
 	ModerateUser(context.Context, ModerationRequest) error
 	DeleteUserHistory(context.Context, int64, int64) error
+	BlockUser(context.Context, int64) error
+	UnblockUser(context.Context, int64) error
+	ReportSpam(context.Context, int64) error
+	DeletePrivateHistory(context.Context, int64) error
+	GetPrivateChatSettings(context.Context, int64) (PrivateChatSettings, error)
+	SetPrivateChatQuarantined(context.Context, int64, bool) error
+	GetGlobalAutoArchive(context.Context) (bool, error)
+	SetGlobalAutoArchive(context.Context, bool) error
+	UpdateAccountUsername(context.Context, string) error
+	CreateChannel(context.Context, string, string) (Chat, error)
+	UpdateChatUsername(context.Context, int64, string) error
+	DeleteChannel(context.Context, int64) error
 	SendReaction(context.Context, int64, int, []Reaction, bool) error
 	GetStickerSet(context.Context, string) (StickerSet, error)
 	CreateStickerSet(context.Context, int64, string, string, Sticker) error
 	AddStickerToSet(context.Context, string, Sticker) error
 	RequestBotMedia(context.Context, BotMediaRequest) (Message, error)
+	SendInlineBotResult(context.Context, InlineBotRequest) (SentMessage, error)
 }

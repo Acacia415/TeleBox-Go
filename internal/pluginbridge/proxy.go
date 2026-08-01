@@ -562,6 +562,142 @@ func (p *telegramProxy) DeleteUserHistory(
 	}, nil)
 }
 
+func (p *telegramProxy) BlockUser(ctx context.Context, userID int64) error {
+	return call(ctx, p.peer, MethodTelegramBlockUser, UserRequest{
+		UserID: userID,
+	}, nil)
+}
+
+func (p *telegramProxy) UnblockUser(ctx context.Context, userID int64) error {
+	return call(ctx, p.peer, MethodTelegramUnblockUser, UserRequest{
+		UserID: userID,
+	}, nil)
+}
+
+func (p *telegramProxy) ReportSpam(ctx context.Context, userID int64) error {
+	return call(ctx, p.peer, MethodTelegramReportSpam, UserRequest{
+		UserID: userID,
+	}, nil)
+}
+
+func (p *telegramProxy) DeletePrivateHistory(
+	ctx context.Context,
+	userID int64,
+) error {
+	return call(ctx, p.peer, MethodTelegramDeletePrivateHistory, UserRequest{
+		UserID: userID,
+	}, nil)
+}
+
+func (p *telegramProxy) GetPrivateChatSettings(
+	ctx context.Context,
+	userID int64,
+) (telegram.PrivateChatSettings, error) {
+	var result telegram.PrivateChatSettings
+	err := call(
+		ctx,
+		p.peer,
+		MethodTelegramGetPrivateChatSettings,
+		UserRequest{UserID: userID},
+		&result,
+	)
+	return result, err
+}
+
+func (p *telegramProxy) SetPrivateChatQuarantined(
+	ctx context.Context,
+	userID int64,
+	enabled bool,
+) error {
+	return call(
+		ctx,
+		p.peer,
+		MethodTelegramSetPrivateChatQuarantined,
+		QuarantineRequest{UserID: userID, Enabled: enabled},
+		nil,
+	)
+}
+
+func (p *telegramProxy) GetGlobalAutoArchive(
+	ctx context.Context,
+) (bool, error) {
+	var result bool
+	err := call(
+		ctx,
+		p.peer,
+		MethodTelegramGetGlobalAutoArchive,
+		struct{}{},
+		&result,
+	)
+	return result, err
+}
+
+func (p *telegramProxy) SetGlobalAutoArchive(
+	ctx context.Context,
+	enabled bool,
+) error {
+	return call(
+		ctx,
+		p.peer,
+		MethodTelegramSetGlobalAutoArchive,
+		ToggleRequest{Enabled: enabled},
+		nil,
+	)
+}
+
+func (p *telegramProxy) UpdateAccountUsername(
+	ctx context.Context,
+	username string,
+) error {
+	return call(
+		ctx,
+		p.peer,
+		MethodTelegramUpdateAccountUsername,
+		UsernameRequest{Username: username},
+		nil,
+	)
+}
+
+func (p *telegramProxy) CreateChannel(
+	ctx context.Context,
+	title string,
+	about string,
+) (telegram.Chat, error) {
+	var result telegram.Chat
+	err := call(
+		ctx,
+		p.peer,
+		MethodTelegramCreateChannel,
+		CreateChannelRequest{Title: title, About: about},
+		&result,
+	)
+	return result, err
+}
+
+func (p *telegramProxy) UpdateChatUsername(
+	ctx context.Context,
+	chatID int64,
+	username string,
+) error {
+	return call(
+		ctx,
+		p.peer,
+		MethodTelegramUpdateChatUsername,
+		ChatUsernameRequest{ChatID: chatID, Username: username},
+		nil,
+	)
+}
+
+func (p *telegramProxy) DeleteChannel(ctx context.Context, chatID int64) error {
+	return call(
+		ctx,
+		p.peer,
+		MethodTelegramDeleteChannel,
+		ChatRequest{ChatID: chatID},
+		nil,
+	)
+}
+
 func (p *telegramProxy) SendReaction(
 	ctx context.Context,
 	chatID int64,
@@ -622,6 +758,21 @@ func (p *telegramProxy) RequestBotMedia(
 	err := call(ctx, p.peer, MethodTelegramRequestBotMedia, BotMediaRequest{
 		Request: request,
 	}, &result)
+	return result, err
+}
+
+func (p *telegramProxy) SendInlineBotResult(
+	ctx context.Context,
+	request telegram.InlineBotRequest,
+) (telegram.SentMessage, error) {
+	var result telegram.SentMessage
+	err := call(
+		ctx,
+		p.peer,
+		MethodTelegramSendInlineBotResult,
+		InlineBotRequest{Request: request},
+		&result,
+	)
 	return result, err
 }
 

@@ -390,6 +390,23 @@ func (a *App) Register(candidate plugin.Plugin) error {
 }
 
 func (a *App) handleMessage(ctx context.Context, message telegram.Message) error {
+	if message.Edited {
+		listeners := a.registry.EditedMessageListeners()
+		if len(listeners) == 0 {
+			return nil
+		}
+		if err := a.commands.Submit(func(jobCtx context.Context) {
+			a.dispatchEditedListeners(jobCtx, message, listeners)
+		}); err != nil {
+			a.logger.Warn(
+				"command queue rejected edited message",
+				"sender_id", message.SenderID,
+				"chat_id", message.ChatID,
+				"error", err,
+			)
+		}
+		return nil
+	}
 	_, commandLike := a.router.Parse(message)
 	listeners := a.registry.MessageListeners()
 	if commandLike && !a.router.IsAuthorized(message) {
@@ -424,6 +441,24 @@ func (a *App) handleMessage(ctx context.Context, message telegram.Message) error
 		)
 	}
 	return nil
+}
+
+func (a *App) dispatchEditedListeners(
+	ctx context.Context,
+	message telegram.Message,
+	listeners []plugin.EditedListener,
+) {
+	for _, listener := range listeners {
+		if err := listener.Handler.OnEditedMessage(ctx, message); err != nil {
+			a.logger.Error(
+				"plugin edited-message listener failed",
+				"plugin", listener.Plugin,
+				"sender_id", message.SenderID,
+				"chat_id", message.ChatID,
+				"error", err,
+			)
+		}
+	}
 }
 
 func (a *App) dispatchListeners(

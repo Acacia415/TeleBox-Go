@@ -58,6 +58,7 @@ Go 版备份使用 SQLite 一致快照和逐文件 SHA-256；恢复拒绝路径�
 | `isalive` | `isalive` | 查询用户最后在线/在线状态及隐私状态提示 |
 | `jointime` | `jointime`/`jt` | 查询普通成员或回复用户的入群时间 |
 | `nsticker` | `sticker`/`s` | 收藏回复贴纸、取消收藏和贴纸包信息处理 |
+| `pmcaptcha` | `pmcaptcha`/`pmc` | 陌生人私聊验证、数学/贴纸/可选图片验证、关键词/Premium/共同群/历史规则、失败处理、反洪水、状态恢复和设置导入导出 |
 | `rate` | `rate` | 加密货币价格、法币汇率和数量换算，保留多上游回退 |
 | `re` | `re` | 回复消息复读、消息数量和重复次数 |
 | `search` | `search`/`so` | 多频道搜索、来源增删/默认/列表、导入导出、讨论组来源和结果转发 |
@@ -76,6 +77,9 @@ Go 版备份使用 SQLite 一致快照和逐文件 SHA-256；恢复拒绝路径�
   导出本地编译包。
 - yt-dlp 的 Cloudflare/自建接口、代理和登录相关配置被保留；服务器遇到
   YouTube 风控时还可显式配置 Cookies 和 Deno。
+- PMCaptcha 保留正常可见功能，但不迁移第三方日志上报、硬编码放行 ID、
+  远程 `eval` 和任意 Python `exec`。自定义规则使用受限表达式；图片验证
+  仍可选择原内联机器人，默认验证方式为本地数学题。
 - 旧 alias、sudo、sure、AI、SpeedLink、Trace、Telegram Backup 和媒体资产
   在首次启动或迁移时兼容读取，再写入 Go 版持久化格式。
 

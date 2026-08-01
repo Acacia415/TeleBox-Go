@@ -28,6 +28,7 @@ type Manifest struct {
 	Executable    string      `json:"executable"`
 	Commands      []Command   `json:"commands"`
 	Listens       bool        `json:"listens_to_messages,omitempty"`
+	ListensEdits  bool        `json:"listens_to_edited_messages,omitempty"`
 	Permissions   Permissions `json:"permissions,omitempty"`
 	Homepage      string      `json:"homepage,omitempty"`
 }
@@ -74,7 +75,7 @@ func (m Manifest) Validate() error {
 	if err := validateExecutable(m.Executable); err != nil {
 		problems = append(problems, err)
 	}
-	if len(m.Commands) == 0 && !m.Listens {
+	if len(m.Commands) == 0 && !m.Listens && !m.ListensEdits {
 		problems = append(problems, errors.New(
 			"plugin must expose a command or message listener",
 		))

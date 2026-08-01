@@ -24,7 +24,8 @@ telebox-plugin-<name>
 
 `plugin.json` 记录 API 版本、命令、架构、权限和可执行文件。`tpm` 从同一
 GitHub Release 下载目录和压缩包，依次验证 HTTPS、文件大小、SHA-256、
-归档路径和 manifest，再原子替换安装目录。
+归档路径和 manifest，再原子替换安装目录。目录中的 `min_host` 会在下载前
+与当前框架版本比较，依赖新增框架能力的插件不会被旧主程序误装。
 
 运行时通过 stdin/stdout 上的双向 JSON RPC 连接插件子进程。插件看到的是
 稳定的 `service.Container` 代理，不直接接触 gotd 的 TL 类型。大文件通过
@@ -50,6 +51,10 @@ GitHub Release 下载目录和压缩包，依次验证 HTTPS、文件大小、SH
 安装、更新和卸载由一个控制器同步处理磁盘目录、运行中注册表和 SQLite
 状态。插件异常退出后，当前调用返回错误；下次调用会启动新进程。关闭时按
 启用顺序逆序停止。
+
+普通新消息与编辑消息使用独立的显式监听能力。只有声明
+`listens_to_edited_messages` 的插件才会收到编辑事件，避免旧监听器在消息
+编辑后重复执行；PMCaptcha 用它接收图片验证结果。
 
 ## 依赖方向
 

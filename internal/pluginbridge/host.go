@@ -474,6 +474,112 @@ func (h *Host) Handle(
 		return nil, translateError(h.services.Telegram.DeleteUserHistory(
 			ctx, request.ChatID, request.UserID,
 		))
+	case MethodTelegramBlockUser, MethodTelegramUnblockUser,
+		MethodTelegramReportSpam, MethodTelegramDeletePrivateHistory:
+		request, err := decode[UserRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		switch method {
+		case MethodTelegramBlockUser:
+			err = h.services.Telegram.BlockUser(ctx, request.UserID)
+		case MethodTelegramUnblockUser:
+			err = h.services.Telegram.UnblockUser(ctx, request.UserID)
+		case MethodTelegramReportSpam:
+			err = h.services.Telegram.ReportSpam(ctx, request.UserID)
+		default:
+			err = h.services.Telegram.DeletePrivateHistory(ctx, request.UserID)
+		}
+		return nil, translateError(err)
+	case MethodTelegramSetPrivateChatQuarantined:
+		request, err := decode[QuarantineRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		return nil, translateError(h.services.Telegram.SetPrivateChatQuarantined(
+			ctx, request.UserID, request.Enabled,
+		))
+	case MethodTelegramGetPrivateChatSettings:
+		request, err := decode[UserRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		result, err := h.services.Telegram.GetPrivateChatSettings(
+			ctx,
+			request.UserID,
+		)
+		return result, translateError(err)
+	case MethodTelegramGetGlobalAutoArchive:
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		result, err := h.services.Telegram.GetGlobalAutoArchive(ctx)
+		return result, translateError(err)
+	case MethodTelegramSetGlobalAutoArchive:
+		request, err := decode[ToggleRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		return nil, translateError(h.services.Telegram.SetGlobalAutoArchive(
+			ctx, request.Enabled,
+		))
+	case MethodTelegramUpdateAccountUsername:
+		request, err := decode[UsernameRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		return nil, translateError(h.services.Telegram.UpdateAccountUsername(
+			ctx, request.Username,
+		))
+	case MethodTelegramCreateChannel:
+		request, err := decode[CreateChannelRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		result, err := h.services.Telegram.CreateChannel(
+			ctx, request.Title, request.About,
+		)
+		return result, translateError(err)
+	case MethodTelegramUpdateChatUsername:
+		request, err := decode[ChatUsernameRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		return nil, translateError(h.services.Telegram.UpdateChatUsername(
+			ctx, request.ChatID, request.Username,
+		))
+	case MethodTelegramDeleteChannel:
+		request, err := decode[ChatRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		return nil, translateError(h.services.Telegram.DeleteChannel(
+			ctx, request.ChatID,
+		))
 	case MethodTelegramSendReaction:
 		request, err := decode[ReactionRequest](raw)
 		if err != nil {
@@ -536,6 +642,18 @@ func (h *Host) Handle(
 			return nil, err
 		}
 		result, err := h.services.Telegram.RequestBotMedia(ctx, request.Request)
+		return result, translateError(err)
+	case MethodTelegramSendInlineBotResult:
+		request, err := decode[InlineBotRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		result, err := h.services.Telegram.SendInlineBotResult(
+			ctx, request.Request,
+		)
 		return result, translateError(err)
 	default:
 		return nil, &pluginrpc.RemoteError{

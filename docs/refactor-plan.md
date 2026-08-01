@@ -32,6 +32,7 @@
 - [x] `isalive`
 - [x] `jointime`
 - [x] `nsticker`
+- [x] `pmcaptcha`
 - [x] `rate`
 - [x] `re`
 - [x] `search`

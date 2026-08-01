@@ -91,6 +91,8 @@ func New(cfg Config) (*Client, error) {
 	client.loggedIn = qrlogin.OnLoginToken(dispatcher)
 	dispatcher.OnNewMessage(client.onNewMessage)
 	dispatcher.OnNewChannelMessage(client.onNewChannelMessage)
+	dispatcher.OnEditMessage(client.onEditMessage)
+	dispatcher.OnEditChannelMessage(client.onEditChannelMessage)
 
 	var updateHandler gotdtelegram.UpdateHandler
 	client.updates = updates.New(updates.Config{Handler: dispatcher})
@@ -455,14 +457,35 @@ func (c *Client) resolveInputPeer(ctx context.Context, chatID int64) (tg.InputPe
 }
 
 func (c *Client) onNewMessage(ctx context.Context, entities tg.Entities, update *tg.UpdateNewMessage) error {
-	return c.handleMessage(ctx, entities, update.Message)
+	return c.handleMessage(ctx, entities, update.Message, false)
 }
 
 func (c *Client) onNewChannelMessage(ctx context.Context, entities tg.Entities, update *tg.UpdateNewChannelMessage) error {
-	return c.handleMessage(ctx, entities, update.Message)
+	return c.handleMessage(ctx, entities, update.Message, false)
 }
 
-func (c *Client) handleMessage(ctx context.Context, entities tg.Entities, messageClass tg.MessageClass) error {
+func (c *Client) onEditMessage(
+	ctx context.Context,
+	entities tg.Entities,
+	update *tg.UpdateEditMessage,
+) error {
+	return c.handleMessage(ctx, entities, update.Message, true)
+}
+
+func (c *Client) onEditChannelMessage(
+	ctx context.Context,
+	entities tg.Entities,
+	update *tg.UpdateEditChannelMessage,
+) error {
+	return c.handleMessage(ctx, entities, update.Message, true)
+}
+
+func (c *Client) handleMessage(
+	ctx context.Context,
+	entities tg.Entities,
+	messageClass tg.MessageClass,
+	edited bool,
+) error {
 	raw, ok := messageClass.(*tg.Message)
 	if !ok {
 		return nil
@@ -474,7 +497,13 @@ func (c *Client) handleMessage(ctx context.Context, entities tg.Entities, messag
 	}
 	inputPeer, err := inputPeer(entities, raw.PeerID)
 	if err != nil {
-		return err
+		c.mu.RLock()
+		cached, ok := c.peerCache[chatID]
+		c.mu.RUnlock()
+		if !ok {
+			return err
+		}
+		inputPeer = cached
 	}
 
 	c.cacheEntities(entities)
@@ -487,7 +516,9 @@ func (c *Client) handleMessage(ctx context.Context, entities tg.Entities, messag
 		return nil
 	}
 
-	return handler(ctx, stableMessage(raw, chatID, selfID))
+	message := stableMessage(raw, chatID, selfID)
+	message.Edited = edited
+	return handler(ctx, message)
 }
 
 func (c *Client) cacheEntities(entities tg.Entities) {

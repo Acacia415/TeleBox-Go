@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	MethodPluginStart   = "plugin.start"
-	MethodPluginStop    = "plugin.stop"
-	MethodPluginHandle  = "plugin.handle"
-	MethodPluginMessage = "plugin.message"
+	MethodPluginStart         = "plugin.start"
+	MethodPluginStop          = "plugin.stop"
+	MethodPluginHandle        = "plugin.handle"
+	MethodPluginMessage       = "plugin.message"
+	MethodPluginEditedMessage = "plugin.edited_message"
 
 	MethodStorageGet    = "storage.get"
 	MethodStoragePut    = "storage.put"
@@ -22,37 +23,50 @@ const (
 	MethodToolLookPath = "tool.look_path"
 	MethodToolRun      = "tool.run"
 
-	MethodTelegramSendText             = "telegram.send_text"
-	MethodTelegramReplyText            = "telegram.reply_text"
-	MethodTelegramEditText             = "telegram.edit_text"
-	MethodTelegramSendHTML             = "telegram.send_html"
-	MethodTelegramReplyHTML            = "telegram.reply_html"
-	MethodTelegramEditHTML             = "telegram.edit_html"
-	MethodTelegramDeleteMessages       = "telegram.delete_messages"
-	MethodTelegramForwardMessages      = "telegram.forward_messages"
-	MethodTelegramCopyMessages         = "telegram.copy_messages"
-	MethodTelegramSendFile             = "telegram.send_file"
-	MethodTelegramGetMessages          = "telegram.get_messages"
-	MethodTelegramGetHistory           = "telegram.get_history"
-	MethodTelegramDownloadMedia        = "telegram.download_media"
-	MethodTelegramDownloadMediaPreview = "telegram.download_media_preview"
-	MethodTelegramDownloadProfilePhoto = "telegram.download_profile_photo"
-	MethodTelegramResolveUser          = "telegram.resolve_user"
-	MethodTelegramResolveChat          = "telegram.resolve_chat"
-	MethodTelegramResolveChatTarget    = "telegram.resolve_chat_target"
-	MethodTelegramGetMyPermissions     = "telegram.get_my_permissions"
-	MethodTelegramGetChatMember        = "telegram.get_chat_member"
-	MethodTelegramFindJoinTime         = "telegram.find_join_time"
-	MethodTelegramListChats            = "telegram.list_chats"
-	MethodTelegramListManagedChats     = "telegram.list_managed_chats"
-	MethodTelegramJoinChat             = "telegram.join_chat"
-	MethodTelegramModerateUser         = "telegram.moderate_user"
-	MethodTelegramDeleteUserHistory    = "telegram.delete_user_history"
-	MethodTelegramSendReaction         = "telegram.send_reaction"
-	MethodTelegramGetStickerSet        = "telegram.get_sticker_set"
-	MethodTelegramCreateStickerSet     = "telegram.create_sticker_set"
-	MethodTelegramAddStickerToSet      = "telegram.add_sticker_to_set"
-	MethodTelegramRequestBotMedia      = "telegram.request_bot_media"
+	MethodTelegramSendText                  = "telegram.send_text"
+	MethodTelegramReplyText                 = "telegram.reply_text"
+	MethodTelegramEditText                  = "telegram.edit_text"
+	MethodTelegramSendHTML                  = "telegram.send_html"
+	MethodTelegramReplyHTML                 = "telegram.reply_html"
+	MethodTelegramEditHTML                  = "telegram.edit_html"
+	MethodTelegramDeleteMessages            = "telegram.delete_messages"
+	MethodTelegramForwardMessages           = "telegram.forward_messages"
+	MethodTelegramCopyMessages              = "telegram.copy_messages"
+	MethodTelegramSendFile                  = "telegram.send_file"
+	MethodTelegramGetMessages               = "telegram.get_messages"
+	MethodTelegramGetHistory                = "telegram.get_history"
+	MethodTelegramDownloadMedia             = "telegram.download_media"
+	MethodTelegramDownloadMediaPreview      = "telegram.download_media_preview"
+	MethodTelegramDownloadProfilePhoto      = "telegram.download_profile_photo"
+	MethodTelegramResolveUser               = "telegram.resolve_user"
+	MethodTelegramResolveChat               = "telegram.resolve_chat"
+	MethodTelegramResolveChatTarget         = "telegram.resolve_chat_target"
+	MethodTelegramGetMyPermissions          = "telegram.get_my_permissions"
+	MethodTelegramGetChatMember             = "telegram.get_chat_member"
+	MethodTelegramFindJoinTime              = "telegram.find_join_time"
+	MethodTelegramListChats                 = "telegram.list_chats"
+	MethodTelegramListManagedChats          = "telegram.list_managed_chats"
+	MethodTelegramJoinChat                  = "telegram.join_chat"
+	MethodTelegramModerateUser              = "telegram.moderate_user"
+	MethodTelegramDeleteUserHistory         = "telegram.delete_user_history"
+	MethodTelegramBlockUser                 = "telegram.block_user"
+	MethodTelegramUnblockUser               = "telegram.unblock_user"
+	MethodTelegramReportSpam                = "telegram.report_spam"
+	MethodTelegramDeletePrivateHistory      = "telegram.delete_private_history"
+	MethodTelegramGetPrivateChatSettings    = "telegram.get_private_chat_settings"
+	MethodTelegramSetPrivateChatQuarantined = "telegram.set_private_chat_quarantined"
+	MethodTelegramGetGlobalAutoArchive      = "telegram.get_global_auto_archive"
+	MethodTelegramSetGlobalAutoArchive      = "telegram.set_global_auto_archive"
+	MethodTelegramUpdateAccountUsername     = "telegram.update_account_username"
+	MethodTelegramCreateChannel             = "telegram.create_channel"
+	MethodTelegramUpdateChatUsername        = "telegram.update_chat_username"
+	MethodTelegramDeleteChannel             = "telegram.delete_channel"
+	MethodTelegramSendReaction              = "telegram.send_reaction"
+	MethodTelegramGetStickerSet             = "telegram.get_sticker_set"
+	MethodTelegramCreateStickerSet          = "telegram.create_sticker_set"
+	MethodTelegramAddStickerToSet           = "telegram.add_sticker_to_set"
+	MethodTelegramRequestBotMedia           = "telegram.request_bot_media"
+	MethodTelegramSendInlineBotResult       = "telegram.send_inline_bot_result"
 )
 
 type Invocation struct {
@@ -138,6 +152,33 @@ type MemberRequest struct {
 	UserID int64 `json:"user_id"`
 }
 
+type UserRequest struct {
+	UserID int64 `json:"user_id"`
+}
+
+type QuarantineRequest struct {
+	UserID  int64 `json:"user_id"`
+	Enabled bool  `json:"enabled"`
+}
+
+type ToggleRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+type UsernameRequest struct {
+	Username string `json:"username"`
+}
+
+type CreateChannelRequest struct {
+	Title string `json:"title"`
+	About string `json:"about"`
+}
+
+type ChatUsernameRequest struct {
+	ChatID   int64  `json:"chat_id"`
+	Username string `json:"username"`
+}
+
 type FindJoinTimeRequest struct {
 	ChatID int64 `json:"chat_id"`
 	UserID int64 `json:"user_id"`
@@ -182,4 +223,8 @@ type AddStickerRequest struct {
 
 type BotMediaRequest struct {
 	Request telegram.BotMediaRequest `json:"request"`
+}
+
+type InlineBotRequest struct {
+	Request telegram.InlineBotRequest `json:"request"`
 }
