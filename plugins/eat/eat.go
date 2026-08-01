@@ -37,6 +37,7 @@ const (
 	maxImageBytes    = 8 << 20
 	stickerFileName  = "output.webp"
 	stickerMIMEType  = "image/webp"
+	stickerTrimAlpha = 8
 )
 
 type role struct {
@@ -99,7 +100,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.3.4",
+		Version:     "0.3.5",
 		Description: "使用头像或回复图片制作静态表情",
 	}
 }
@@ -711,7 +712,10 @@ func trimTransparent(source image.Image) image.Image {
 	maxX, maxY := bounds.Min.X, bounds.Min.Y
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			if color.NRGBAModel.Convert(source.At(x, y)).(color.NRGBA).A == 0 {
+			// Some WebP stickers retain nearly invisible alpha across the full
+			// canvas. Ignore that encoding noise so the visible artwork can be
+			// centered inside the template mask.
+			if color.NRGBAModel.Convert(source.At(x, y)).(color.NRGBA).A < stickerTrimAlpha {
 				continue
 			}
 			minX = min(minX, x)
