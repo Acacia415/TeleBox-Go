@@ -17,6 +17,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
 	"github.com/Acacia415/TeleBox-Go/internal/legacyconfig"
+	"github.com/Acacia415/TeleBox-Go/internal/managedtool"
 	"github.com/Acacia415/TeleBox-Go/internal/storage"
 	"github.com/Acacia415/TeleBox-Go/internal/toolrunner"
 )
@@ -158,14 +159,38 @@ func (p *Plugin) ensureYTDLP(ctx context.Context, force bool) (string, error) {
 	}
 	target := filepath.Join(p.assetDir, targetName)
 	if force {
-		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", err
+		if _, statErr := os.Stat(target); statErr == nil {
+			if managedtool.Verify(target, p.ytDLPReceiptPath()) == nil {
+				if err := os.Remove(target); err != nil {
+					return "", err
+				}
+			} else if _, err := managedtool.Quarantine(
+				target, filepath.Join(p.assetDir, "quarantine"),
+			); err != nil {
+				return "", fmt.Errorf("quarantine old yt-dlp: %w", err)
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return "", statErr
 		}
+		_ = os.Remove(p.ytDLPReceiptPath())
 	}
 	if err := os.Rename(tempPath, target); err != nil {
 		return "", err
 	}
+	if err := managedtool.WriteReceipt(
+		p.ytDLPReceiptPath(),
+		ytDLPReleaseBase+"/"+assetName,
+		"latest",
+		expected,
+	); err != nil {
+		_ = os.Remove(target)
+		return "", fmt.Errorf("write yt-dlp installation receipt: %w", err)
+	}
 	return target, nil
+}
+
+func (p *Plugin) ytDLPReceiptPath() string {
+	return filepath.Join(p.assetDir, ".yt-dlp-managed.json")
 }
 
 func checksumFor(document []byte, name string) string {

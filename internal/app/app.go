@@ -18,6 +18,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/dispatch"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
 	"github.com/Acacia415/TeleBox-Go/internal/legacyconfig"
+	"github.com/Acacia415/TeleBox-Go/internal/migration"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/pluginmanager"
 	"github.com/Acacia415/TeleBox-Go/internal/pluginmarket"
@@ -69,6 +70,30 @@ func New(
 	if err := os.MkdirAll(cfg.Storage.LegacyAssetsPath, 0o700); err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("create legacy asset directory: %w", err)
+	}
+	if err := os.MkdirAll(cfg.Storage.AssetsPath, 0o700); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("create active asset directory: %w", err)
+	}
+	quarantined, err := migration.QuarantineUnsafeActiveAssets(
+		cfg.Storage.AssetsPath,
+		cfg.Storage.LegacyAssetsPath,
+	)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("quarantine unsafe active assets: %w", err)
+	}
+	if quarantined.QuarantinedFiles > 0 {
+		logger.Info(
+			"quarantined unsafe migrated assets",
+			"files", quarantined.QuarantinedFiles,
+			"bytes", quarantined.QuarantinedBytes,
+			"directory", filepath.Join(
+				cfg.Storage.LegacyAssetsPath,
+				"_quarantine",
+				"active-assets",
+			),
+		)
 	}
 	tools, err := toolrunner.New(cfg.Tools.MaxConcurrent)
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
+	"github.com/Acacia415/TeleBox-Go/internal/managedtool"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
@@ -61,7 +62,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "yt-dlp",
-		Version:     "0.3.2",
+		Version:     "0.3.3",
 		Description: "使用 yt-dlp 搜索并下载 YouTube 音乐",
 	}
 }
@@ -512,7 +513,7 @@ func (p *Plugin) clear(ctx context.Context, request command.Request) error {
 
 func (p *Plugin) findExecutable(ctx context.Context) (string, error) {
 	if configured, _ := p.read(ctx, "binary"); configured != "" {
-		if info, err := os.Stat(configured); err == nil && !info.IsDir() {
+		if managedtool.Executable(configured) {
 			return configured, nil
 		}
 	}
@@ -521,15 +522,27 @@ func (p *Plugin) findExecutable(ctx context.Context) (string, error) {
 		names = []string{"yt-dlp.exe", "yt-dlp"}
 	}
 	for _, name := range names {
+		candidates := []string{filepath.Join(p.assetDir, name)}
 		if p.services.AssetsDir != "" {
-			candidates := []string{
-				filepath.Join(p.services.AssetsDir, "ytdlp", name),
-				filepath.Join(p.services.AssetsDir, name),
+			candidates = append(candidates, filepath.Join(p.services.AssetsDir, name))
+		}
+		for _, candidate := range uniqueExecutablePaths(candidates) {
+			if _, err := os.Stat(candidate); err != nil {
+				continue
 			}
-			for _, candidate := range candidates {
-				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-					return candidate, nil
-				}
+			if candidate == filepath.Join(p.assetDir, name) &&
+				managedtool.Verify(candidate, p.ytDLPReceiptPath()) == nil {
+				return candidate, nil
+			}
+			quarantined, err := managedtool.Quarantine(
+				candidate, filepath.Join(p.assetDir, "quarantine"),
+			)
+			if err != nil {
+				return "", fmt.Errorf("隔离旧 yt-dlp 失败: %w", err)
+			}
+			_ = os.Remove(p.ytDLPReceiptPath())
+			if quarantined != "" && p.services.Logger != nil {
+				p.services.Logger.Info("quarantined unmanaged yt-dlp", "path", quarantined)
 			}
 		}
 		if executable, err := p.services.Tools.LookPath(name); err == nil {
@@ -537,6 +550,20 @@ func (p *Plugin) findExecutable(ctx context.Context) (string, error) {
 		}
 	}
 	return "", toolrunner.ErrExecutableNotFound
+}
+
+func uniqueExecutablePaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, candidate := range paths {
+		cleaned := filepath.Clean(candidate)
+		if _, exists := seen[cleaned]; exists {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		result = append(result, candidate)
+	}
+	return result
 }
 
 func (p *Plugin) read(ctx context.Context, key string) (string, error) {

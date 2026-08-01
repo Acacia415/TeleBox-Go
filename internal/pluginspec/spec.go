@@ -37,7 +37,7 @@ var catalog = []Spec{
 	{Name: "rate", Package: modulePath + "/plugins/rate", Constructor: "New", SourceDir: "plugins/rate"},
 	{Name: "re", Package: modulePath + "/plugins/repeat", Constructor: "New", SourceDir: "plugins/repeat"},
 	{Name: "search", Package: modulePath + "/plugins/search", Constructor: "New", SourceDir: "plugins/search"},
-	{Name: "speedlink", Package: modulePath + "/plugins/speedlink", Constructor: "New", SourceDir: "plugins/speedlink"},
+	{Name: "speedlink", Package: modulePath + "/plugins/speedlink", Constructor: "New", SourceDir: "plugins/speedlink", MinHost: "0.7.1"},
 	{Name: "telegram-backup", Package: modulePath + "/plugins/telegrambackup", Constructor: "New", SourceDir: "plugins/telegrambackup"},
 	{Name: "trace", Package: modulePath + "/plugins/trace", Constructor: "New", SourceDir: "plugins/trace"},
 	{Name: "yt-dlp", Package: modulePath + "/plugins/ytdlp", Constructor: "New", SourceDir: "plugins/ytdlp"},

@@ -5,10 +5,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"database/sql"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 )
@@ -56,8 +60,15 @@ func TestParseSpeedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := formatSpeedResult("Tokyo", got)
-	for _, fragment := range []string{"Tokyo", "1.00 Mbps", "500.00 Kbps"} {
+	text := formatSpeedResultHTML("Tokyo", false, got, "AS64500", "🇯🇵", 1250*time.Millisecond)
+	for _, fragment := range []string{
+		"<b>Tokyo</b> 🇯🇵",
+		"Example AS64500",
+		"1Mbps",
+		"500Kbps",
+		"1.25s",
+		"2026-07-26 08:00:00 (UTC+8)",
+	} {
 		if !strings.Contains(text, fragment) {
 			t.Fatalf("result missing %q:\n%s", fragment, text)
 		}
@@ -104,6 +115,48 @@ func TestExtractSpeedtestArchive(t *testing.T) {
 	}
 	if !bytes.Equal(got, content) {
 		t.Fatalf("extracted = %q", got)
+	}
+}
+
+func TestFillSpeedtestBorderMatchesOriginalLayout(t *testing.T) {
+	root := t.TempDir()
+	inputPath := filepath.Join(root, "input.png")
+	outputPath := filepath.Join(root, "output.png")
+	input := image.NewRGBA(image.Rect(0, 0, 40, 40))
+	for y := 0; y < 40; y++ {
+		for x := 0; x < 40; x++ {
+			input.Set(x, y, color.RGBA{R: 0xff, A: 0xff})
+		}
+	}
+	file, err := os.Create(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(file, input); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fillSpeedtestBorder(inputPath, outputPath, 14); err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.Open(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := png.Decode(output)
+	_ = output.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := color.RGBAModel.Convert(decoded.At(0, 0)).(color.RGBA); got !=
+		(color.RGBA{R: 0x21, G: 0x23, B: 0x38, A: 0xff}) {
+		t.Fatalf("border color = %#v", got)
+	}
+	if got := color.RGBAModel.Convert(decoded.At(20, 20)).(color.RGBA); got.R != 0xff {
+		t.Fatalf("center color = %#v", got)
 	}
 }
 

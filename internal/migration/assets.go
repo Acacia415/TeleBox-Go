@@ -26,17 +26,21 @@ const (
 )
 
 type AssetExtraction struct {
-	Files int   `json:"files"`
-	Bytes int64 `json:"bytes"`
+	Files            int   `json:"files"`
+	Bytes            int64 `json:"bytes"`
+	QuarantinedFiles int   `json:"quarantined_files,omitempty"`
+	QuarantinedBytes int64 `json:"quarantined_bytes,omitempty"`
 }
 
 type assetManifest struct {
-	Version       int      `json:"version"`
-	SourceSHA256  string   `json:"source_sha256"`
-	Plugins       []string `json:"plugins"`
-	ExtractedFile int      `json:"extracted_files"`
-	ExtractedByte int64    `json:"extracted_bytes"`
-	CreatedAt     string   `json:"created_at"`
+	Version         int      `json:"version"`
+	SourceSHA256    string   `json:"source_sha256"`
+	Plugins         []string `json:"plugins"`
+	ExtractedFile   int      `json:"extracted_files"`
+	ExtractedByte   int64    `json:"extracted_bytes"`
+	QuarantinedFile int      `json:"quarantined_files,omitempty"`
+	QuarantinedByte int64    `json:"quarantined_bytes,omitempty"`
+	CreatedAt       string   `json:"created_at"`
 }
 
 type preservedAssetFile struct {
@@ -100,6 +104,15 @@ func inspectLegacyAssets(archivePath string, plugins []string) (AssetExtraction,
 		if header.Size < 0 || header.Size > maxAssetFileSize ||
 			result.Bytes+header.Size > maxAssetTotalSize {
 			return AssetExtraction{}, fmt.Errorf("archive asset %q exceeds migration size limit", name)
+		}
+		prefix, err := readAssetPrefix(reader, header.Size)
+		if err != nil {
+			return AssetExtraction{}, fmt.Errorf("inspect asset %q: %w", name, err)
+		}
+		if unsafeActiveAsset(relative, header.Mode, prefix) {
+			result.QuarantinedFiles++
+			result.QuarantinedBytes += header.Size
+			continue
 		}
 		result.Files++
 		if result.Files > maxAssetFileCount {
@@ -195,12 +208,14 @@ func ExtractLegacyAssets(
 		return AssetExtraction{}, err
 	}
 	manifest := assetManifest{
-		Version:       1,
-		SourceSHA256:  sourceSHA256,
-		Plugins:       append([]string(nil), plugins...),
-		ExtractedFile: extraction.Files,
-		ExtractedByte: extraction.Bytes,
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		Version:         1,
+		SourceSHA256:    sourceSHA256,
+		Plugins:         append([]string(nil), plugins...),
+		ExtractedFile:   extraction.Files,
+		ExtractedByte:   extraction.Bytes,
+		QuarantinedFile: extraction.QuarantinedFiles,
+		QuarantinedByte: extraction.QuarantinedBytes,
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	sort.Strings(manifest.Plugins)
 	encoded, err := json.MarshalIndent(manifest, "", "  ")
@@ -436,18 +451,34 @@ func extractSelectedAssets(
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return AssetExtraction{}, fmt.Errorf("create asset directory: %w", err)
 		}
-		mode := os.FileMode(0o600)
-		if header.Mode&0o111 != 0 {
-			mode = 0o700
+		prefix, err := readAssetPrefix(reader, header.Size)
+		if err != nil {
+			return AssetExtraction{}, fmt.Errorf("inspect asset %q: %w", relative, err)
 		}
-		file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if unsafeActiveAsset(relative, header.Mode, prefix) {
+			result.QuarantinedFiles++
+			result.QuarantinedBytes += header.Size
+			continue
+		}
+		file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
 			return AssetExtraction{}, fmt.Errorf("create migrated asset %q: %w", relative, err)
 		}
-		written, copyErr := io.CopyN(file, reader, header.Size)
+		prefixWritten, prefixErr := file.Write(prefix)
+		remaining := header.Size - int64(len(prefix))
+		written, copyErr := io.CopyN(file, reader, remaining)
+		written += int64(prefixWritten)
 		closeErr := file.Close()
-		if copyErr != nil {
-			return AssetExtraction{}, fmt.Errorf("extract asset %q: %w", relative, copyErr)
+		if prefixErr != nil || prefixWritten != len(prefix) || copyErr != nil {
+			writeErr := errors.Join(prefixErr, copyErr)
+			if prefixWritten != len(prefix) {
+				writeErr = errors.Join(writeErr, io.ErrShortWrite)
+			}
+			return AssetExtraction{}, fmt.Errorf(
+				"extract asset %q: %w",
+				relative,
+				writeErr,
+			)
 		}
 		if closeErr != nil {
 			return AssetExtraction{}, fmt.Errorf("close migrated asset %q: %w", relative, closeErr)
@@ -456,6 +487,52 @@ func extractSelectedAssets(
 		result.Bytes += written
 	}
 	return result, nil
+}
+
+func readAssetPrefix(reader io.Reader, size int64) ([]byte, error) {
+	length := min(size, int64(4096))
+	if length <= 0 {
+		return nil, nil
+	}
+	prefix := make([]byte, int(length))
+	_, err := io.ReadFull(reader, prefix)
+	return prefix, err
+}
+
+func unsafeActiveAsset(relative string, mode int64, prefix []byte) bool {
+	if mode&0o111 != 0 {
+		return true
+	}
+	name := strings.ToLower(path.Base(strings.ReplaceAll(relative, "\\", "/")))
+	for _, managed := range []string{
+		"speedtest", "speedtest.exe", "yt-dlp", "yt-dlp.exe",
+		"deno", "deno.exe", "ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe",
+	} {
+		if name == managed {
+			return true
+		}
+	}
+	switch strings.ToLower(path.Ext(name)) {
+	case ".exe", ".com", ".bat", ".cmd", ".ps1", ".sh", ".bash", ".zsh",
+		".fish", ".py", ".pyc", ".js", ".mjs", ".cjs", ".ts", ".so",
+		".dll", ".dylib", ".appimage", ".jar", ".class", ".wasm", ".node":
+		return true
+	}
+	if len(prefix) >= 2 && prefix[0] == 'M' && prefix[1] == 'Z' {
+		return true
+	}
+	if len(prefix) >= 4 {
+		magic := string(prefix[:4])
+		switch magic {
+		case "\x7fELF", "\xfe\xed\xfa\xce", "\xce\xfa\xed\xfe", "\xfe\xed\xfa\xcf", "\xcf\xfa\xed\xfe":
+			return true
+		}
+	}
+	trimmed := prefix
+	if len(trimmed) >= 3 && trimmed[0] == 0xef && trimmed[1] == 0xbb && trimmed[2] == 0xbf {
+		trimmed = trimmed[3:]
+	}
+	return len(trimmed) >= 2 && trimmed[0] == '#' && trimmed[1] == '!'
 }
 
 func safeDestinationPath(root, relative string) (string, error) {

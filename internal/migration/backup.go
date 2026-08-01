@@ -41,6 +41,8 @@ type BackupInventory struct {
 	AssetRoots          []string            `json:"asset_roots"`
 	AssetFiles          int                 `json:"migratable_asset_files"`
 	AssetBytes          int64               `json:"migratable_asset_bytes"`
+	QuarantinedFiles    int                 `json:"quarantined_asset_files"`
+	QuarantinedBytes    int64               `json:"quarantined_asset_bytes"`
 	PreservedAssetFiles int                 `json:"preserved_asset_files"`
 	PreservedAssetBytes int64               `json:"preserved_asset_bytes"`
 	SessionFormat       StringSessionFormat `json:"session_format"`
@@ -109,6 +111,8 @@ func InspectBackup(archivePath string) (BackupInventory, error) {
 	}
 	inventory.AssetFiles = assets.Files
 	inventory.AssetBytes = assets.Bytes
+	inventory.QuarantinedFiles = assets.QuarantinedFiles
+	inventory.QuarantinedBytes = assets.QuarantinedBytes
 	preservedAssets, err := inspectAllLegacyAssets(archivePath)
 	if err != nil {
 		return BackupInventory{}, err

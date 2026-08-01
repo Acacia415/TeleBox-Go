@@ -592,25 +592,60 @@ systemctl restart telebox.service
 安装器会在当前目录、`~/telebox-migration` 和用户目录下的标准迁移布局中
 寻找结果，并询问是否导入；没有找到迁移结果时仍按普通新安装执行。
 
-建议在独立空目录中转换并测试，迁移器会拒绝覆盖已有配置、会话或资源目录：
+建议把备份上传到独立目录，不需要解压。下面以 root 用户和备份文件
+`telebox_backup_20260726_054103_70aa79a0.tar.gz` 为例；实际文件名可以不同：
 
 ```bash
 mkdir -m 700 ~/telebox-migration
 cd ~/telebox-migration
+
+# 在自己的电脑上执行，把备份上传到服务器
+scp /path/to/telebox_backup_*.tar.gz root@服务器地址:/root/telebox-migration/
+```
+
+回到服务器后确认文件并限制权限：
+
+```bash
+cd ~/telebox-migration
+ls -lh *.tar.gz
+chmod 600 ./telebox_backup_20260726_054103_70aa79a0.tar.gz
+BACKUP="$PWD/telebox_backup_20260726_054103_70aa79a0.tar.gz"
+```
+
+先确认迁移器是否已经安装：
+
+```bash
+command -v telebox-migrate || ls -l ~/.local/bin/telebox-migrate
+```
+
+通过一键安装器安装的新版本会同时安装迁移器。较早安装后只在 Telegram 中
+执行过 `-update` 的机器可能没有该文件，可以先补装当前正式包；该命令不会
+重新登录，但会停止服务，完成后按需重新启动：
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/Acacia415/TeleBox-Go/main/scripts/install.sh |
+  sh -s -- --no-login
+
+systemctl start telebox.service 2>/dev/null ||
+  systemctl --user start telebox.service
 ```
 
 先检查备份。该命令只读取压缩包，不输出 API Hash、Session 或数据库内容：
 
 ```bash
-/path/to/telebox-migrate inspect \
-  -archive /path/to/telebox-backup.tar.gz
+~/.local/bin/telebox-migrate inspect -archive "$BACKUP"
 ```
+
+检查结果中的 `migratable_asset_*` 是会进入活动目录的数据，
+`quarantined_asset_*` 是只保存在安全保留目录中的旧程序或脚本，
+`preserved_asset_*` 是完整保留的原版插件资产。
 
 不带 `-apply` 的转换命令也是 dry-run，只显示检查结果：
 
 ```bash
-/path/to/telebox-migrate convert \
-  -archive /path/to/telebox-backup.tar.gz \
+~/.local/bin/telebox-migrate convert \
+  -archive "$BACKUP" \
   -config config.json \
   -session data/session.json \
   -assets data/assets \
@@ -620,8 +655,8 @@ cd ~/telebox-migration
 确认无误后增加 `-apply`，生成 TeleBox-Go 配置、gotd 会话和插件资产：
 
 ```bash
-/path/to/telebox-migrate convert \
-  -archive /path/to/telebox-backup.tar.gz \
+~/.local/bin/telebox-migrate convert \
+  -archive "$BACKUP" \
   -config config.json \
   -session data/session.json \
   -assets data/assets \
@@ -644,6 +679,12 @@ curl -fsSL \
 - 原版支持的数据进入活动资产目录，插件首次启动时写入 Go 版 SQLite。
 - 暂无对应 Go 插件的数据进入完整保留目录；以后安装对应插件时仍可读取。
 - 导入过程可以重复执行，已经存在的文件会标记为“已存在”并跳过。
+
+安装器询问“检测到原版迁移登录会话，是否继续使用？”时：
+
+- 在新服务器上继续使用原版登录会话，直接输入 `Y` 或回车。
+- 已经有可用的 TeleBox-Go 登录会话，不希望替换时输入 `n`；手动导入时也可
+  使用 `-skip-session`。
 
 迁移结果不在标准目录时，可以明确指定：
 
@@ -672,6 +713,17 @@ TELEBOX_IMPORT_MIGRATION=yes \
 -p doctor
 ```
 
+插件数据在对应插件第一次启动时导入。安装完成后可以查看日志：
+
+```bash
+journalctl -u telebox.service -n 200 --no-pager |
+  grep -E 'migrated legacy|quarantined unsafe'
+```
+
+日志中的 `migrated legacy speedlink servers`、`migrated legacy yt-dlp config`
+等记录表示数据已写入 Go 版存储。没有安装对应插件时，数据仍保存在
+`legacy-assets`，以后安装插件再导入。
+
 旧 alias、sudo、sure、AI、Cezi、Convert、YT、SpeedLink、Trace 等已支持
 数据会从活动资产或完整保留目录读取，并在插件首次启动时写入 Go 版存储。
 例如 `cezi_config.db` 会恢复测字配置，`speedlink/secret.key` 与
@@ -679,6 +731,11 @@ TELEBOX_IMPORT_MIGRATION=yes \
 `telebox/assets` 下的全部插件数据都会完整保存到 `data/legacy-assets`：
 
 - 文件固定为不可执行的私有权限，不会被框架或插件自动运行。
+- ELF、Windows EXE、脚本以及旧 `speedtest`、`yt-dlp` 不会进入活动目录；
+  它们记录在迁移统计中并保留在安全目录。
+- SpeedLink 和 YT 会从官方上游重新安装所需程序并记录校验凭据。旧版本迁移
+  到活动目录的程序会在主程序启动时自动移动到
+  `legacy-assets/_quarantine/active-assets`。
 - `_legacy_manifest*.json` 记录来源备份摘要、相对路径、大小和逐文件 SHA-256。
 - 暂不支持的旧插件不会被启用，但其数据可由未来的 Go 插件安全导入。
 - 原压缩包不会被修改，也不会复制旧 API 配置或登录会话到该目录。

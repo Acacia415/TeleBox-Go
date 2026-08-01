@@ -11,6 +11,7 @@ import (
 
 	"github.com/gotd/td/constant"
 	gotdmessage "github.com/gotd/td/telegram/message"
+	"github.com/gotd/td/telegram/message/html"
 	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/telegram/message/unpack"
 	gotdpeers "github.com/gotd/td/telegram/peers"
@@ -61,7 +62,11 @@ func (c *Client) SendFile(
 
 	var caption []gotdmessage.StyledTextOption
 	if upload.Caption != "" {
-		caption = append(caption, styling.Plain(upload.Caption))
+		if upload.CaptionHTML {
+			caption = append(caption, html.String(nil, upload.Caption))
+		} else {
+			caption = append(caption, styling.Plain(upload.Caption))
+		}
 	}
 	name := filepath.Base(upload.FileName)
 	if name == "." || name == "" {
