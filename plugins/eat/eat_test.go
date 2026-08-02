@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Acacia415/TeleBox-Go/internal/service"
+	"github.com/Acacia415/TeleBox-Go/internal/telegram"
 	"github.com/HugoSmits86/nativewebp"
 	"golang.org/x/image/webp"
 )
@@ -290,6 +291,53 @@ func TestStickerOutputIsWebP(t *testing.T) {
 	}
 	if decoded.Bounds() != source.Bounds() {
 		t.Fatalf("decoded bounds = %v", decoded.Bounds())
+	}
+}
+
+func TestDynamicStickerFrameStrategy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		media      telegram.Media
+		preview    bool
+		firstFrame bool
+	}{
+		{
+			name:    "tgs MIME",
+			media:   telegram.Media{MIMEType: "application/x-tgsticker"},
+			preview: true,
+		},
+		{
+			name:    "tgs filename",
+			media:   telegram.Media{FileName: "sticker.TGS"},
+			preview: true,
+		},
+		{
+			name:       "webm MIME",
+			media:      telegram.Media{MIMEType: "video/webm"},
+			firstFrame: true,
+		},
+		{
+			name:       "webm filename",
+			media:      telegram.Media{FileName: "sticker.WEBM"},
+			firstFrame: true,
+		},
+		{
+			name:  "static webp",
+			media: telegram.Media{MIMEType: "image/webp"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := usesTelegramStickerPreview(test.media); got != test.preview {
+				t.Fatalf("usesTelegramStickerPreview() = %t, want %t", got, test.preview)
+			}
+			if got := usesFFmpegFirstFrame(test.media); got != test.firstFrame {
+				t.Fatalf("usesFFmpegFirstFrame() = %t, want %t", got, test.firstFrame)
+			}
+		})
 	}
 }
 
