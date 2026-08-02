@@ -23,12 +23,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/command"
 	"github.com/Acacia415/TeleBox-Go/internal/httpclient"
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
+	"github.com/Acacia415/TeleBox-Go/internal/toolrunner"
 	"github.com/HugoSmits86/nativewebp"
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
@@ -104,7 +106,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.3.7",
+		Version:     "0.3.8",
 		Description: "使用头像或回复图片制作静态表情",
 	}
 }
@@ -261,7 +263,7 @@ func (p *Plugin) diagnose(
 
 	files := make(map[string][]byte)
 	var report strings.Builder
-	fmt.Fprintf(&report, "eat plugin: 0.3.7\n")
+	fmt.Fprintf(&report, "eat plugin: 0.3.8\n")
 	fmt.Fprintf(&report, "template: %s (%s)\n", key, selected.Name)
 	fmt.Fprintf(&report, "message media: kind=%s mime=%s size=%d declared=%dx%d\n",
 		replied.Media.Kind,
@@ -759,6 +761,13 @@ func (p *Plugin) youImage(
 	if replied.Media == nil {
 		return nil, errors.New("回复消息不包含图片或媒体")
 	}
+	if usesTelegramStickerPreview(*replied.Media) {
+		decoded, err := p.telegramPreviewImage(ctx, request, replied)
+		if err != nil {
+			return nil, errors.New("动态贴纸没有可用的静态预览")
+		}
+		return p.prepareReplyImage(decoded, replied), nil
+	}
 	var data bytes.Buffer
 	if _, err := p.services.Telegram.DownloadMedia(
 		ctx,
@@ -768,14 +777,114 @@ func (p *Plugin) youImage(
 	); err != nil {
 		return nil, err
 	}
+	if usesFFmpegFirstFrame(*replied.Media) {
+		decoded, frameErr := p.videoFirstFrame(ctx, data.Bytes())
+		if frameErr == nil {
+			return p.prepareReplyImage(decoded, replied), nil
+		}
+		if p.services.Logger != nil {
+			p.services.Logger.Warn(
+				"extract eat2 video sticker frame failed; using preview",
+				"error", frameErr,
+			)
+		}
+		decoded, previewErr := p.telegramPreviewImage(ctx, request, replied)
+		if previewErr != nil {
+			return nil, errors.New("无法提取视频贴纸首帧，请确认已安装 FFmpeg")
+		}
+		return p.prepareReplyImage(decoded, replied), nil
+	}
 	decoded, _, err := image.Decode(bytes.NewReader(data.Bytes()))
 	if err != nil {
-		return nil, err
+		preview, previewErr := p.telegramPreviewImage(ctx, request, replied)
+		if previewErr != nil {
+			return nil, errors.New("媒体格式不受支持，无法提取静态画面")
+		}
+		decoded = preview
 	}
+	return p.prepareReplyImage(decoded, replied), nil
+}
+
+func (p *Plugin) prepareReplyImage(decoded image.Image, replied telegram.Message) image.Image {
 	if replied.Media.Kind == telegram.MediaSticker {
 		decoded = trimStickerContent(decoded)
 	}
-	return decoded, nil
+	return decoded
+}
+
+func (p *Plugin) telegramPreviewImage(
+	ctx context.Context,
+	request command.Request,
+	replied telegram.Message,
+) (image.Image, error) {
+	var preview bytes.Buffer
+	if _, err := p.services.Telegram.DownloadMediaPreview(
+		ctx,
+		request.Message.ChatID,
+		replied.ID,
+		&boundedWriter{Writer: &preview, Remaining: maxImageBytes},
+	); err != nil {
+		return nil, err
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(preview.Bytes()))
+	return decoded, err
+}
+
+func (p *Plugin) videoFirstFrame(ctx context.Context, data []byte) (image.Image, error) {
+	if p.services.Tools == nil {
+		return nil, errors.New("FFmpeg 不可用")
+	}
+	if _, err := p.services.Tools.LookPath("ffmpeg"); err != nil {
+		return nil, errors.New("未找到 FFmpeg")
+	}
+	jobDir, err := os.MkdirTemp(p.workDir, "first-frame-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(jobDir)
+	inputName := "input.webm"
+	outputName := "first-frame.png"
+	if err := os.WriteFile(filepath.Join(jobDir, inputName), data, 0o600); err != nil {
+		return nil, err
+	}
+	result, err := p.services.Tools.Run(ctx, toolrunner.Command{
+		Name: "ffmpeg",
+		Args: []string{
+			"-hide_banner", "-loglevel", "error", "-y",
+			"-i", inputName,
+			"-map", "0:v:0",
+			"-frames:v", "1",
+			outputName,
+		},
+		Directory: jobDir,
+		Timeout:   time.Minute,
+		MaxOutput: 64 << 10,
+	})
+	if err != nil {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return nil, fmt.Errorf("FFmpeg: %s", detail)
+	}
+	frame, err := os.ReadFile(filepath.Join(jobDir, outputName))
+	if err != nil {
+		return nil, err
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(frame))
+	return decoded, err
+}
+
+func usesTelegramStickerPreview(media telegram.Media) bool {
+	mimeType := strings.ToLower(strings.TrimSpace(media.MIMEType))
+	fileName := strings.ToLower(strings.TrimSpace(media.FileName))
+	return mimeType == "application/x-tgsticker" || strings.HasSuffix(fileName, ".tgs")
+}
+
+func usesFFmpegFirstFrame(media telegram.Media) bool {
+	mimeType := strings.ToLower(strings.TrimSpace(media.MIMEType))
+	fileName := strings.ToLower(strings.TrimSpace(media.FileName))
+	return mimeType == "video/webm" || strings.HasSuffix(fileName, ".webm")
 }
 
 func (p *Plugin) profileImage(ctx context.Context, userID int64) (image.Image, error) {
@@ -1327,6 +1436,7 @@ const eatGuideHTML = `<b>静态表情</b>
 <code>{{prefix}}eat2</code>  查看模板列表
 回复图片后发送 <code>{{prefix}}eat2 &lt;模板名&gt;</code>
 模板名留空时随机选择
+动态或视频贴纸会自动提取静态首帧；WebM 首选 FFmpeg，失败时使用 Telegram 预览
 位置或裁剪异常时，回复原图发送 <code>{{prefix}}eat2 debug &lt;模板名&gt;</code> 获取一次性诊断包
 
 <b>模板配置</b>
