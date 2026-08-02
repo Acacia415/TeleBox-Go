@@ -12,6 +12,7 @@ import (
 
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	appstorage "github.com/Acacia415/TeleBox-Go/internal/storage"
+	"github.com/Acacia415/TeleBox-Go/internal/usererror"
 )
 
 func TestParseManual(t *testing.T) {
@@ -44,6 +45,9 @@ func TestYTHelpIncludesReverseProxyAndLoginGuidance(t *testing.T) {
 	}
 	if strings.Contains(got, "{{prefix}}") {
 		t.Fatal("help contains an unresolved prefix placeholder")
+	}
+	if sanitized, changed := usererror.SanitizeText(got); changed || sanitized != got {
+		t.Fatal("help was mistaken for a runtime error")
 	}
 }
 

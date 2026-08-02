@@ -98,6 +98,15 @@ func TestSanitizeText(t *testing.T) {
 			want:       "ERROR: 这是用户要求保留的普通文本",
 			wantChange: false,
 		},
+		{
+			name: "help text containing troubleshooting phrases",
+			input: "<b>命令帮助</b>\n<code>-yt</code>\n\n" +
+				"Gemini 官方 API 无法直连时，可部署反代。\n" +
+				"示例：https://example.workers.dev\n\n" +
+				"出现 Sign in to confirm you're not a bot 时需要 Cookies。",
+			want:       "Gemini 官方 API 无法直连时，可部署反代。",
+			wantChange: false,
+		},
 	}
 
 	for _, test := range tests {
