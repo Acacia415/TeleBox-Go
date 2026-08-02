@@ -282,10 +282,19 @@ func Localize(raw string) string {
 }
 
 func looksLikeFailure(text string) bool {
-	return strings.Contains(text, "❌") ||
-		strings.Contains(text, "失败") ||
-		strings.Contains(text, "错误") ||
-		strings.Contains(text, "无法")
+	if strings.Contains(text, "❌") {
+		return true
+	}
+	// Status and error messages put their outcome in the leading block. Help,
+	// tutorials and settings may legitimately mention words such as "无法" or
+	// "失败" later in the body and must not be rewritten as runtime errors.
+	header := text
+	if index := strings.Index(header, "\n\n"); index >= 0 {
+		header = header[:index]
+	}
+	return strings.Contains(header, "失败") ||
+		strings.Contains(header, "错误") ||
+		strings.Contains(header, "无法")
 }
 
 func technicalStart(text string) int {
