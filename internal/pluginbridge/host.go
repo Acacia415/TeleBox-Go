@@ -271,6 +271,13 @@ func (h *Host) Handle(
 			return nil, err
 		}
 		request.Upload.Path = safePath
+		if request.Upload.ThumbnailPath != "" {
+			safeThumbnailPath, err := h.safeExistingPath(request.Upload.ThumbnailPath)
+			if err != nil {
+				return nil, err
+			}
+			request.Upload.ThumbnailPath = safeThumbnailPath
+		}
 		result, err := h.services.Telegram.SendFile(ctx, request.ChatID, request.Upload)
 		return result, translateError(err)
 	case MethodTelegramGetMessages:

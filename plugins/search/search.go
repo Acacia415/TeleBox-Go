@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -20,11 +23,15 @@ import (
 	"github.com/Acacia415/TeleBox-Go/internal/plugin"
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/telegram"
+	xdraw "golang.org/x/image/draw"
 )
 
 const (
-	configKey       = "config"
-	maxSearchResult = 100
+	configKey                    = "config"
+	maxSearchResult              = 100
+	maxThumbnailInputBytes int64 = 4 << 20
+	maxThumbnailBytes            = 200 << 10
+	maxThumbnailEdge             = 320
 )
 
 type channel struct {
@@ -56,7 +63,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "search",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "多频道视频资源搜索、随机速览与广告过滤",
 	}
 }
@@ -650,26 +657,104 @@ func (p *Plugin) sendSpoiler(
 	if closeErr != nil {
 		return p.respond(ctx, request, "❌ 保存搜索结果失败："+closeErr.Error())
 	}
+	thumbnailPath := p.spoilerThumbnail(ctx, message, directory)
 	caption := query
 	if caption == "" {
 		caption = message.Text
 	}
 	_, err = p.services.Telegram.SendFile(ctx, request.Message.ChatID, telegram.Upload{
-		Path:      path,
-		FileName:  fileName,
-		MIMEType:  media.MIMEType,
-		Caption:   caption,
-		ReplyToID: request.Message.ID,
-		Kind:      telegram.MediaVideo,
-		Width:     media.Width,
-		Height:    media.Height,
-		Duration:  media.Duration,
-		Spoiler:   true,
+		Path:          path,
+		ThumbnailPath: thumbnailPath,
+		FileName:      fileName,
+		MIMEType:      media.MIMEType,
+		Caption:       caption,
+		ReplyToID:     request.Message.ID,
+		Kind:          telegram.MediaVideo,
+		Width:         media.Width,
+		Height:        media.Height,
+		Duration:      media.Duration,
+		Spoiler:       true,
 	})
 	if err != nil {
 		return p.respond(ctx, request, "❌ 上传搜索结果失败："+err.Error())
 	}
 	return p.deleteCommand(ctx, request)
+}
+
+func (p *Plugin) spoilerThumbnail(
+	ctx context.Context,
+	message telegram.Message,
+	directory string,
+) string {
+	var preview bytes.Buffer
+	if _, err := p.services.Telegram.DownloadMediaPreview(
+		ctx,
+		message.ChatID,
+		message.ID,
+		&limitedWriter{
+			Writer:        &preview,
+			Remaining:     maxThumbnailInputBytes,
+			TooLargeError: "视频缩略图超过 4 MiB",
+		},
+	); err != nil {
+		p.services.Logger.Warn(
+			"search video thumbnail unavailable; sending without explicit thumbnail",
+			"message_id", message.ID,
+			"error", err,
+		)
+		return ""
+	}
+	path := filepath.Join(directory, "search-result-thumbnail.jpg")
+	if err := prepareVideoThumbnail(preview.Bytes(), path); err != nil {
+		p.services.Logger.Warn(
+			"search video thumbnail invalid; sending without explicit thumbnail",
+			"message_id", message.ID,
+			"error", err,
+		)
+		return ""
+	}
+	return path
+}
+
+func prepareVideoThumbnail(data []byte, path string) error {
+	source, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("decode thumbnail: %w", err)
+	}
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return errors.New("thumbnail dimensions are empty")
+	}
+	if width > maxThumbnailEdge || height > maxThumbnailEdge {
+		scale := min(
+			float64(maxThumbnailEdge)/float64(width),
+			float64(maxThumbnailEdge)/float64(height),
+		)
+		width = max(1, int(float64(width)*scale))
+		height = max(1, int(float64(height)*scale))
+		resized := image.NewNRGBA(image.Rect(0, 0, width, height))
+		xdraw.CatmullRom.Scale(
+			resized,
+			resized.Bounds(),
+			source,
+			bounds,
+			xdraw.Over,
+			nil,
+		)
+		source = resized
+	}
+	var encoded bytes.Buffer
+	for _, quality := range []int{84, 72, 60, 48} {
+		encoded.Reset()
+		if err := jpeg.Encode(&encoded, source, &jpeg.Options{Quality: quality}); err != nil {
+			return fmt.Errorf("encode thumbnail: %w", err)
+		}
+		if encoded.Len() <= maxThumbnailBytes {
+			return os.WriteFile(path, encoded.Bytes(), 0o600)
+		}
+	}
+	return fmt.Errorf("thumbnail exceeds %d bytes", maxThumbnailBytes)
 }
 
 func (p *Plugin) load(ctx context.Context) (config, error) {
@@ -942,12 +1027,17 @@ const searchGuideHTML = `<b>🔍 多频道视频搜索</b>
 
 type limitedWriter struct {
 	io.Writer
-	Remaining int64
+	Remaining     int64
+	TooLargeError string
 }
 
 func (w *limitedWriter) Write(data []byte) (int, error) {
 	if int64(len(data)) > w.Remaining {
-		return 0, errors.New("配置文件超过 256 KiB")
+		message := w.TooLargeError
+		if message == "" {
+			message = "配置文件超过 256 KiB"
+		}
+		return 0, errors.New(message)
 	}
 	count, err := w.Writer.Write(data)
 	w.Remaining -= int64(count)

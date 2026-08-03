@@ -36,7 +36,7 @@ var catalog = []Spec{
 	{Name: "pmcaptcha", Package: modulePath + "/plugins/pmcaptcha", Constructor: "New", SourceDir: "plugins/pmcaptcha", MinHost: "0.7.0"},
 	{Name: "rate", Package: modulePath + "/plugins/rate", Constructor: "New", SourceDir: "plugins/rate"},
 	{Name: "re", Package: modulePath + "/plugins/repeat", Constructor: "New", SourceDir: "plugins/repeat"},
-	{Name: "search", Package: modulePath + "/plugins/search", Constructor: "New", SourceDir: "plugins/search"},
+	{Name: "search", Package: modulePath + "/plugins/search", Constructor: "New", SourceDir: "plugins/search", MinHost: "0.8.2"},
 	{Name: "speedlink", Package: modulePath + "/plugins/speedlink", Constructor: "New", SourceDir: "plugins/speedlink", MinHost: "0.7.2"},
 	{Name: "telegram-backup", Package: modulePath + "/plugins/telegrambackup", Constructor: "New", SourceDir: "plugins/telegrambackup"},
 	{Name: "trace", Package: modulePath + "/plugins/trace", Constructor: "New", SourceDir: "plugins/trace"},

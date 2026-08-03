@@ -23,6 +23,10 @@ func TestCatalog(t *testing.T) {
 	if !ok || speedlink.MinHost != "0.7.2" {
 		t.Fatalf("speedlink specification = %+v, found=%t", speedlink, ok)
 	}
+	search, ok := Find("search")
+	if !ok || search.MinHost != "0.8.2" {
+		t.Fatalf("search specification = %+v, found=%t", search, ok)
+	}
 	if _, exists := Find("unsupported"); exists {
 		t.Fatal(`Find("unsupported") = true`)
 	}

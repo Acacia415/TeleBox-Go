@@ -230,23 +230,25 @@ type SentMessage struct {
 	MessageID int
 }
 
-// Upload describes a local file to send. Path must point to a regular file;
-// plugins never pass shell commands or gotd-specific media objects.
+// Upload describes a local file to send. Path and the optional ThumbnailPath
+// must point to regular files; plugins never pass shell commands or
+// gotd-specific media objects.
 type Upload struct {
-	Path         string
-	FileName     string
-	MIMEType     string
-	Caption      string
-	CaptionHTML  bool
-	ReplyToID    int
-	Kind         MediaKind
-	Width        int
-	Height       int
-	Duration     time.Duration
-	Spoiler      bool
-	AudioTitle   string
-	Performer    string
-	StickerEmoji string
+	Path          string
+	ThumbnailPath string
+	FileName      string
+	MIMEType      string
+	Caption       string
+	CaptionHTML   bool
+	ReplyToID     int
+	Kind          MediaKind
+	Width         int
+	Height        int
+	Duration      time.Duration
+	Spoiler       bool
+	AudioTitle    string
+	Performer     string
+	StickerEmoji  string
 }
 
 type MessageHandler func(context.Context, Message) error

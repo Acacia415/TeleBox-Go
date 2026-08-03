@@ -59,6 +59,22 @@ func (c *Client) SendFile(
 	if err != nil {
 		return teleboxtelegram.SentMessage{}, fmt.Errorf("upload file: %w", err)
 	}
+	var thumbnailInput tg.InputFileClass
+	if upload.ThumbnailPath != "" {
+		thumbnailInfo, err := os.Stat(upload.ThumbnailPath)
+		if err != nil {
+			return teleboxtelegram.SentMessage{}, fmt.Errorf("inspect upload thumbnail: %w", err)
+		}
+		if !thumbnailInfo.Mode().IsRegular() {
+			return teleboxtelegram.SentMessage{}, errors.New("upload thumbnail path must point to a regular file")
+		}
+		thumbnailInput, err = builder.Upload(
+			gotdmessage.FromPath(upload.ThumbnailPath),
+		).AsInputFile(ctx)
+		if err != nil {
+			return teleboxtelegram.SentMessage{}, fmt.Errorf("upload thumbnail: %w", err)
+		}
+	}
 
 	var caption []gotdmessage.StyledTextOption
 	if upload.Caption != "" {
@@ -72,17 +88,28 @@ func (c *Client) SendFile(
 	if name == "." || name == "" {
 		name = filepath.Base(upload.Path)
 	}
+	newDocument := func() *gotdmessage.UploadedDocumentBuilder {
+		document := configureDocument(
+			gotdmessage.UploadedDocument(input, caption...),
+			name,
+			upload.MIMEType,
+		)
+		if thumbnailInput != nil {
+			document.Thumb(thumbnailInput)
+		}
+		return document
+	}
 
 	var media gotdmessage.MediaOption
 	switch kind {
 	case teleboxtelegram.MediaPhoto:
 		media = gotdmessage.UploadedPhoto(input, caption...).Spoiler(upload.Spoiler)
 	case teleboxtelegram.MediaDocument:
-		media = configureDocument(gotdmessage.UploadedDocument(input, caption...), name, upload.MIMEType).
+		media = newDocument().
 			Spoiler(upload.Spoiler).
 			ForceFile(true)
 	case teleboxtelegram.MediaAudio:
-		audio := configureDocument(gotdmessage.UploadedDocument(input, caption...), name, upload.MIMEType).
+		audio := newDocument().
 			Spoiler(upload.Spoiler).
 			Audio()
 		if upload.Duration > 0 {
@@ -96,7 +123,7 @@ func (c *Client) SendFile(
 		}
 		media = audio
 	case teleboxtelegram.MediaVoice:
-		voice := configureDocument(gotdmessage.UploadedDocument(input, caption...), name, upload.MIMEType).
+		voice := newDocument().
 			Spoiler(upload.Spoiler).
 			Voice()
 		if upload.Duration > 0 {
@@ -104,11 +131,7 @@ func (c *Client) SendFile(
 		}
 		media = voice
 	case teleboxtelegram.MediaVideo, teleboxtelegram.MediaVideoNote:
-		videoDocument := configureDocument(
-			gotdmessage.UploadedDocument(input, caption...),
-			name,
-			upload.MIMEType,
-		).Spoiler(upload.Spoiler)
+		videoDocument := newDocument().Spoiler(upload.Spoiler)
 		video := videoDocument.Video()
 		if kind == teleboxtelegram.MediaVideoNote {
 			video.Round()
@@ -123,13 +146,9 @@ func (c *Client) SendFile(
 		}
 		media = video
 	case teleboxtelegram.MediaAnimation:
-		media = configureDocument(
-			gotdmessage.UploadedDocument(input, caption...),
-			name,
-			upload.MIMEType,
-		).Spoiler(upload.Spoiler).GIF()
+		media = newDocument().Spoiler(upload.Spoiler).GIF()
 	case teleboxtelegram.MediaSticker:
-		sticker := configureDocument(gotdmessage.UploadedDocument(input, caption...), name, upload.MIMEType).
+		sticker := newDocument().
 			Spoiler(upload.Spoiler).
 			UploadedSticker()
 		if upload.StickerEmoji != "" {
