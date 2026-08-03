@@ -321,16 +321,15 @@ func (p *telegramProxy) SendFile(
 	chatID int64,
 	upload telegram.Upload,
 ) (telegram.SentMessage, error) {
-	staged, cleanup, err := p.stageUpload(upload.Path, upload.FileName)
+	stagedUpload, cleanup, err := p.stageTelegramUpload(upload)
 	if err != nil {
 		return telegram.SentMessage{}, err
 	}
 	defer cleanup()
-	upload.Path = staged
 	var result telegram.SentMessage
 	err = call(ctx, p.peer, MethodTelegramSendFile, SendFileRequest{
 		ChatID: chatID,
-		Upload: upload,
+		Upload: stagedUpload,
 	}, &result)
 	return result, err
 }
@@ -813,6 +812,35 @@ func (p *telegramProxy) stageUpload(
 		return "", func() {}, err
 	}
 	return path, func() { _ = os.Remove(path) }, nil
+}
+
+func (p *telegramProxy) stageTelegramUpload(
+	upload telegram.Upload,
+) (telegram.Upload, func(), error) {
+	staged, cleanupMedia, err := p.stageUpload(upload.Path, upload.FileName)
+	if err != nil {
+		return telegram.Upload{}, func() {}, err
+	}
+	upload.Path = staged
+	cleanup := cleanupMedia
+	if strings.TrimSpace(upload.ThumbnailPath) == "" {
+		upload.ThumbnailPath = ""
+		return upload, cleanup, nil
+	}
+	stagedThumbnail, cleanupThumbnail, err := p.stageUpload(
+		upload.ThumbnailPath,
+		filepath.Base(upload.ThumbnailPath),
+	)
+	if err != nil {
+		cleanupMedia()
+		return telegram.Upload{}, func() {}, fmt.Errorf("stage upload thumbnail: %w", err)
+	}
+	upload.ThumbnailPath = stagedThumbnail
+	cleanup = func() {
+		cleanupThumbnail()
+		cleanupMedia()
+	}
+	return upload, cleanup, nil
 }
 
 func safeUploadExtension(value string) string {
