@@ -59,6 +59,19 @@ func TestBuildPlainEntryPreservesParagraphs(t *testing.T) {
 	}
 }
 
+func TestBuildEntryWithMediaAndNoCaption(t *testing.T) {
+	t.Parallel()
+
+	entry, err := buildEntry(
+		telegram.Message{},
+		nil,
+		"![图片](</api/files/01k00000000000000000000000>)",
+	)
+	if err != nil || !strings.Contains(entry, "![图片]") {
+		t.Fatalf("media entry = %q, %v", entry, err)
+	}
+}
+
 func TestMessageLinksUsesTelegramUTF16Offsets(t *testing.T) {
 	t.Parallel()
 

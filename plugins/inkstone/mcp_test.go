@@ -204,3 +204,93 @@ func TestMCPClientSearchesNotes(t *testing.T) {
 		t.Fatalf("search tool request = %s", requestBody)
 	}
 }
+
+func TestMCPClientCreatesNote(t *testing.T) {
+	t.Parallel()
+
+	id := "01k00000000000000000000000"
+	httpClient := &scriptedHTTP{responses: []httpclient.Response{
+		{
+			StatusCode: http.StatusOK,
+			Headers:    http.Header{"Content-Type": []string{"application/json"}},
+			Body:       []byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}`),
+		},
+		{StatusCode: http.StatusAccepted, Headers: make(http.Header)},
+		{
+			StatusCode: http.StatusOK,
+			Headers:    http.Header{"Content-Type": []string{"application/json"}},
+			Body: []byte(`{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"data":{"note":{` +
+				`"id":"` + id + `","title":"项目 备忘","rev":1}}}}}`),
+		},
+	}}
+	client, err := newMCPClient(
+		httpClient,
+		"https://inkstone.example.com/mcp",
+		"ink_"+strings.Repeat("a", 43),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := client.createNote(context.Background(), "tg_create_test", "项目 备忘")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != id || created.Title != "项目 备忘" || created.Rev != 1 {
+		t.Fatalf("created note = %#v", created)
+	}
+	requestBody := string(httpClient.requests[2].Body)
+	for _, want := range []string{`"name":"create_note"`, `"operation_id":"tg_create_test"`, `"title":"项目 备忘"`} {
+		if !strings.Contains(requestBody, want) {
+			t.Fatalf("create tool request does not contain %s: %s", want, requestBody)
+		}
+	}
+}
+
+func TestMCPClientUploadsPrivateAttachment(t *testing.T) {
+	t.Parallel()
+
+	noteID := "01k00000000000000000000000"
+	attachmentID := "01k00000000000000000000001"
+	httpClient := &scriptedHTTP{responses: []httpclient.Response{{
+		StatusCode: http.StatusCreated,
+		Headers:    http.Header{"Content-Type": []string{"application/json"}},
+		Body: []byte(`{"id":"` + attachmentID + `","noteId":"` + noteID +
+			`","filename":"photo.jpg","mime":"image/jpeg","size":4,"url":"/api/files/` + attachmentID + `"}`),
+	}}}
+	client, err := newMCPClient(
+		httpClient,
+		"https://inkstone.example.com/mcp",
+		"ink_"+strings.Repeat("a", 43),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploaded, err := client.uploadAttachment(
+		context.Background(),
+		noteID,
+		"photo.jpg",
+		"image/jpeg",
+		[]byte{0xff, 0xd8, 0xff, 0xdb},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploaded.ID != attachmentID || uploaded.NoteID != noteID {
+		t.Fatalf("uploaded attachment = %#v", uploaded)
+	}
+	if len(httpClient.requests) != 1 {
+		t.Fatalf("upload requests = %d", len(httpClient.requests))
+	}
+	request := httpClient.requests[0]
+	if request.URL != "https://inkstone.example.com/api/files/mcp" ||
+		request.Headers.Get("X-Inkstone-Client") != "1" ||
+		!strings.HasPrefix(request.Headers.Get("Content-Type"), "multipart/form-data;") {
+		t.Fatalf("upload request = %#v", request)
+	}
+	body := string(request.Body)
+	for _, want := range []string{"photo.jpg", "image/jpeg", noteID} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("upload body does not contain %q", want)
+		}
+	}
+}

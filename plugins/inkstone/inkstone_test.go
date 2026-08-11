@@ -30,6 +30,10 @@ func TestDetailedHelpCoversSetupAndUsage(t *testing.T) {
 		"-ink find 浩希",
 		"-ink bind hx 浩希",
 		"-ink bind hx #2",
+		"-ink new hx 浩希",
+		"25 MiB",
+		"GIF",
+		"视频",
 		"-ink hx -force",
 		"普通文字",
 		"不发送笔记地址",
@@ -44,6 +48,32 @@ func TestDetailedHelpCoversSetupAndUsage(t *testing.T) {
 	}
 	if !strings.Contains(help, "https://inkstone.example.com/mcp") {
 		t.Fatal("help must use a generic Inkstone endpoint example")
+	}
+}
+
+func TestParseCreateRequest(t *testing.T) {
+	t.Parallel()
+
+	alias, title, err := parseCreateRequest("new HX 项目 备忘")
+	if err != nil || alias != "hx" || title != "项目 备忘" {
+		t.Fatalf("parseCreateRequest = %q, %q, %v", alias, title, err)
+	}
+	if _, _, err := parseCreateRequest("new hx"); err == nil {
+		t.Fatal("create request without title was accepted")
+	}
+	if err := validateAlias("new"); err == nil {
+		t.Fatal("new command was accepted as an alias")
+	}
+}
+
+func TestStableCreateOperationID(t *testing.T) {
+	t.Parallel()
+
+	first := stableCreateOperationID(-100123, 42, "HX", "项目 备忘")
+	second := stableCreateOperationID(-100123, 42, "hx", "项目 备忘")
+	other := stableCreateOperationID(-100123, 43, "hx", "项目 备忘")
+	if first != second || first == other || !strings.HasPrefix(first, "tg_create_") {
+		t.Fatalf("create operation IDs = %q, %q, %q", first, second, other)
 	}
 }
 
