@@ -17,6 +17,7 @@ import (
 	"github.com/Acacia415/TeleBox-Go/plugins/eat"
 	"github.com/Acacia415/TeleBox-Go/plugins/gif"
 	"github.com/Acacia415/TeleBox-Go/plugins/ids"
+	"github.com/Acacia415/TeleBox-Go/plugins/inkstone"
 	"github.com/Acacia415/TeleBox-Go/plugins/iplookup"
 	"github.com/Acacia415/TeleBox-Go/plugins/isalive"
 	"github.com/Acacia415/TeleBox-Go/plugins/jointime"
@@ -52,6 +53,7 @@ func TestEveryBusinessPluginProvidesDetailedHelp(t *testing.T) {
 		"eatgif":          eat.NewGIF(services),
 		"gif":             gif.New(services),
 		"ids":             ids.New(services),
+		"inkstone":        inkstone.New(services),
 		"ip":              iplookup.New(services),
 		"isalive":         isalive.New(services),
 		"jointime":        jointime.New(services),

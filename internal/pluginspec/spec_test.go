@@ -7,10 +7,10 @@ func TestCatalog(t *testing.T) {
 	if err := Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(All()); got != 26 {
-		t.Fatalf("plugin specifications = %d, want 26", got)
+	if got := len(All()); got != 27 {
+		t.Fatalf("plugin specifications = %d, want 27", got)
 	}
-	for _, name := range []string{"bin", "eatgif", "telegram-backup", "yt-dlp"} {
+	for _, name := range []string{"bin", "eatgif", "inkstone", "telegram-backup", "yt-dlp"} {
 		if _, exists := Find(name); !exists {
 			t.Fatalf("Find(%q) = false", name)
 		}
@@ -26,6 +26,10 @@ func TestCatalog(t *testing.T) {
 	search, ok := Find("search")
 	if !ok || search.MinHost != "0.8.2" {
 		t.Fatalf("search specification = %+v, found=%t", search, ok)
+	}
+	inkstone, ok := Find("inkstone")
+	if !ok || inkstone.MinHost != "0.8.3" {
+		t.Fatalf("inkstone specification = %+v, found=%t", inkstone, ok)
 	}
 	if _, exists := Find("unsupported"); exists {
 		t.Fatal(`Find("unsupported") = true`)

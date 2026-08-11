@@ -463,6 +463,17 @@ func (p *telegramProxy) ResolveChatTarget(
 	return result, err
 }
 
+func (p *telegramProxy) ResolveCustomEmoji(
+	ctx context.Context,
+	documentIDs []int64,
+) ([]telegram.CustomEmoji, error) {
+	var result []telegram.CustomEmoji
+	err := call(ctx, p.peer, MethodTelegramResolveCustomEmoji, CustomEmojiRequest{
+		DocumentIDs: documentIDs,
+	}, &result)
+	return result, err
+}
+
 func (p *telegramProxy) GetMyPermissions(
 	ctx context.Context,
 	chatID int64,

@@ -503,6 +503,10 @@ func portableMessageEntities(
 			entity.Type = "code"
 		case *tg.MessageEntityPre:
 			entity.Type = "pre"
+			entity.Language = typed.Language
+		case *tg.MessageEntityBlockquote:
+			entity.Type = "blockquote"
+			entity.Collapsed = typed.Collapsed
 		case *tg.MessageEntityCustomEmoji:
 			entity.Type = "custom_emoji"
 			entity.DocumentID = typed.DocumentID
@@ -526,6 +530,8 @@ func portableMessageEntities(
 			entity.Type = "email"
 		case *tg.MessageEntityPhone:
 			entity.Type = "phone_number"
+		case *tg.MessageEntityBankCard:
+			entity.Type = "bank_card"
 		case *tg.MessageEntitySpoiler:
 			entity.Type = "spoiler"
 		}

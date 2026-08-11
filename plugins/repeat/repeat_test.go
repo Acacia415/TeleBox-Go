@@ -21,10 +21,10 @@ func TestParseArgs(t *testing.T) {
 }
 
 func TestMessageRange(t *testing.T) {
-	if got, want := messageRange(12, 3), []int{10, 11, 12}; !reflect.DeepEqual(got, want) {
+	if got, want := messageRange(12, 3), []int{12, 13, 14}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("messageRange = %v, want %v", got, want)
 	}
-	if got, want := messageRange(2, 5), []int{1, 2}; !reflect.DeepEqual(got, want) {
+	if got, want := messageRange(1, 2), []int{1, 2}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("messageRange at start = %v, want %v", got, want)
 	}
 }

@@ -395,6 +395,20 @@ func (h *Host) Handle(
 		}
 		result, err := h.services.Telegram.ResolveChatTarget(ctx, request.Target)
 		return result, translateError(err)
+	case MethodTelegramResolveCustomEmoji:
+		request, err := decode[CustomEmojiRequest](raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.checkTelegram(method); err != nil {
+			return nil, err
+		}
+		result, err := telegram.ResolveCustomEmoji(
+			ctx,
+			h.services.Telegram,
+			request.DocumentIDs,
+		)
+		return result, translateError(err)
 	case MethodTelegramGetMyPermissions:
 		request, err := decode[ChatRequest](raw)
 		if err != nil {
