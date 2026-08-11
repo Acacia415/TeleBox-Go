@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -20,14 +22,16 @@ import (
 
 const (
 	mcpProtocolVersion = "2025-06-18"
-	mcpClientVersion   = "0.2.5"
+	mcpClientVersion   = "0.3.0"
+	maxAttachmentBytes = 25 * 1024 * 1024
 )
 
 type mcpClient struct {
-	http     service.HTTPClient
-	endpoint string
-	apiKey   string
-	nextID   atomic.Int64
+	http      service.HTTPClient
+	endpoint  string
+	uploadURL string
+	apiKey    string
+	nextID    atomic.Int64
 }
 
 type mcpRPCError struct {
@@ -86,6 +90,15 @@ type noteSearchResult struct {
 	Title string `json:"title"`
 }
 
+type uploadedAttachment struct {
+	ID       string `json:"id"`
+	NoteID   string `json:"noteId"`
+	FileName string `json:"filename"`
+	MIMEType string `json:"mime"`
+	Size     int64  `json:"size"`
+	URL      string `json:"url"`
+}
+
 type editRequest struct {
 	OperationID string
 	NoteID      string
@@ -93,6 +106,26 @@ type editRequest struct {
 	Operation   string
 	Text        string
 	OldText     string
+}
+
+func (c *mcpClient) createNote(
+	ctx context.Context,
+	operationID string,
+	title string,
+) (editedNote, error) {
+	title = strings.TrimSpace(title)
+	if operationID == "" || title == "" {
+		return editedNote{}, errors.New("新建笔记参数不完整")
+	}
+	structured, err := c.callTool(ctx, "create_note", map[string]any{
+		"operation_id": operationID,
+		"title":        title,
+		"content":      "",
+	})
+	if err != nil {
+		return editedNote{}, err
+	}
+	return decodeEditedNote(structured, "新建")
 }
 
 func newMCPClient(httpClient service.HTTPClient, endpoint, apiKey string) (*mcpClient, error) {
@@ -107,11 +140,145 @@ func newMCPClient(httpClient service.HTTPClient, endpoint, apiKey string) (*mcpC
 	if !strings.HasPrefix(apiKey, "ink_") || len(apiKey) < 40 || len(apiKey) > 128 {
 		return nil, errors.New("INKSTONE_API_KEY 未配置或格式不正确")
 	}
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return nil, errors.New("INKSTONE_MCP_URL 无法用于附件上传")
+	}
+	parsed.Path = "/api/files/mcp"
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
 	return &mcpClient{
-		http:     httpClient,
-		endpoint: normalized,
-		apiKey:   apiKey,
+		http:      httpClient,
+		endpoint:  normalized,
+		uploadURL: parsed.String(),
+		apiKey:    apiKey,
 	}, nil
+}
+
+func (c *mcpClient) uploadAttachment(
+	ctx context.Context,
+	noteID string,
+	fileName string,
+	mimeType string,
+	data []byte,
+) (uploadedAttachment, error) {
+	if !noteIDPattern.MatchString(strings.ToLower(strings.TrimSpace(noteID))) {
+		return uploadedAttachment{}, errors.New("附件对应的笔记 ID 无效")
+	}
+	if len(data) == 0 {
+		return uploadedAttachment{}, errors.New("附件内容为空")
+	}
+	if len(data) > maxAttachmentBytes {
+		return uploadedAttachment{}, errors.New("图片或视频不能超过 25 MiB")
+	}
+	fileName = safeUploadFileName(fileName)
+	mimeType = strings.TrimSpace(strings.ToLower(strings.Split(mimeType, ";")[0]))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", fmt.Sprintf(
+		`form-data; name="file"; filename="%s"`,
+		strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(fileName),
+	))
+	header.Set("Content-Type", mimeType)
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return uploadedAttachment{}, fmt.Errorf("准备附件上传失败：%w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return uploadedAttachment{}, fmt.Errorf("准备附件上传失败：%w", err)
+	}
+	if err := writer.WriteField("noteId", noteID); err != nil {
+		return uploadedAttachment{}, fmt.Errorf("准备附件上传失败：%w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return uploadedAttachment{}, fmt.Errorf("准备附件上传失败：%w", err)
+	}
+
+	response, err := c.http.Do(ctx, httpclient.Request{
+		Method: http.MethodPost,
+		URL:    c.uploadURL,
+		Headers: http.Header{
+			"Authorization":     []string{"Bearer " + c.apiKey},
+			"Content-Type":      []string{writer.FormDataContentType()},
+			"X-Inkstone-Client": []string{"1"},
+			"Accept":            []string{"application/json"},
+		},
+		Body:    body.Bytes(),
+		Timeout: 2 * time.Minute,
+	})
+	if err != nil {
+		return uploadedAttachment{}, fmt.Errorf("上传到 Inkstone 失败：%w", err)
+	}
+	if response.StatusCode != http.StatusCreated {
+		return uploadedAttachment{}, attachmentStatusError(response.StatusCode, response.Body)
+	}
+	var result uploadedAttachment
+	if err := json.Unmarshal(response.Body, &result); err != nil {
+		return uploadedAttachment{}, fmt.Errorf("解析 Inkstone 附件结果失败：%w", err)
+	}
+	if !noteIDPattern.MatchString(strings.ToLower(result.ID)) ||
+		!strings.HasPrefix(result.URL, "/api/files/") || result.Size < 1 {
+		return uploadedAttachment{}, errors.New("Inkstone 返回的附件信息不完整")
+	}
+	return result, nil
+}
+
+func safeUploadFileName(value string) string {
+	value = strings.TrimSpace(strings.Map(func(character rune) rune {
+		if character < ' ' || strings.ContainsRune(`\\/:*?"<>|`, character) {
+			return '-'
+		}
+		return character
+	}, value))
+	value = strings.TrimLeft(value, ".")
+	if value == "" {
+		return "telegram-media"
+	}
+	characters := []rune(value)
+	return string(characters[:min(len(characters), 180)])
+}
+
+func attachmentStatusError(status int, body []byte) error {
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &payload)
+	message := strings.TrimSpace(payload.Error.Message)
+	switch status {
+	case http.StatusBadRequest:
+		switch {
+		case strings.Contains(message, "GIF attachments"):
+			return errors.New("不支持写入 GIF 或 Telegram 动图")
+		case strings.Contains(message, "Only supported image and video"):
+			return errors.New("Inkstone 拒绝了不受支持的图片或视频格式")
+		case strings.Contains(message, "associated note"), strings.Contains(message, "noteId"):
+			return errors.New("附件对应的 Inkstone 笔记不存在")
+		}
+	case http.StatusUnauthorized:
+		return errors.New("Inkstone API 密钥无效或已撤销")
+	case http.StatusForbidden:
+		return errors.New("Inkstone 未开放编辑笔记权限")
+	case http.StatusRequestEntityTooLarge:
+		return errors.New("图片或视频不能超过 25 MiB")
+	case http.StatusNotFound:
+		return errors.New("当前 Inkstone 版本不支持 API 密钥上传附件，请先更新 Inkstone")
+	case http.StatusTooManyRequests:
+		return errors.New("Inkstone 附件上传过于频繁，请稍后重试")
+	case http.StatusServiceUnavailable:
+		return errors.New("Inkstone 尚未配置附件存储")
+	}
+	if message == "" {
+		message = http.StatusText(status)
+	}
+	return fmt.Errorf("Inkstone 附件上传失败（HTTP %d）：%s", status, message)
 }
 
 func normalizeEndpoint(value string) (string, error) {
@@ -278,6 +445,10 @@ func (c *mcpClient) editNote(ctx context.Context, input editRequest) (editedNote
 	if err != nil {
 		return editedNote{}, err
 	}
+	return decodeEditedNote(structured, "写入")
+}
+
+func decodeEditedNote(structured json.RawMessage, action string) (editedNote, error) {
 	var payload struct {
 		Data struct {
 			Note struct {
@@ -288,10 +459,10 @@ func (c *mcpClient) editNote(ctx context.Context, input editRequest) (editedNote
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(structured, &payload); err != nil {
-		return editedNote{}, fmt.Errorf("解析 Inkstone 写入结果失败：%w", err)
+		return editedNote{}, fmt.Errorf("解析 Inkstone %s结果失败：%w", action, err)
 	}
 	if payload.Data.Note.ID == "" || payload.Data.Note.Rev < 1 {
-		return editedNote{}, errors.New("Inkstone 返回的写入结果不完整")
+		return editedNote{}, fmt.Errorf("Inkstone 返回的%s结果不完整", action)
 	}
 	return editedNote{
 		ID:    payload.Data.Note.ID,

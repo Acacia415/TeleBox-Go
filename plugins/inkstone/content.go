@@ -26,17 +26,35 @@ type entrySource struct {
 }
 
 func buildPlainEntry(message telegram.Message, source *entrySource) (string, error) {
+	return buildEntry(message, source, "")
+}
+
+func buildEntry(
+	message telegram.Message,
+	source *entrySource,
+	mediaMarkdown string,
+) (string, error) {
 	plainText := cleanMessageText(message.Text)
-	if plainText == "" {
+	mediaMarkdown = strings.TrimSpace(mediaMarkdown)
+	if plainText == "" && mediaMarkdown == "" {
 		return "", errors.New("回复消息没有可写入的文字")
 	}
 	if len([]rune(plainText)) > 20_000 {
 		return "", errors.New("单次写入内容不能超过 20000 个字符")
 	}
-	entry := telegramMarkdown(message)
-	if entry == "" {
+	parts := make([]string, 0, 2)
+	if mediaMarkdown != "" {
+		parts = append(parts, mediaMarkdown)
+	}
+	if plainText != "" {
+		if formatted := telegramMarkdown(message); formatted != "" {
+			parts = append(parts, formatted)
+		}
+	}
+	if len(parts) == 0 {
 		return "", errors.New("回复消息没有可写入的文字")
 	}
+	entry := strings.Join(parts, "\n\n")
 	if source == nil {
 		return entry, nil
 	}

@@ -66,8 +66,8 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        pluginName,
-		Version:     "0.2.5",
-		Description: "将 Telegram 文字、链接和消息来源写入 Inkstone 笔记",
+		Version:     "0.3.0",
+		Description: "将 Telegram 文字、图片、视频、链接和消息来源写入 Inkstone 笔记",
 	}
 }
 
@@ -75,11 +75,12 @@ func (p *Plugin) Commands() []command.Definition {
 	return []command.Definition{{
 		Name:        "inkstone",
 		Aliases:     []string{"ink"},
-		Description: "把文字或回复的消息追加到 Inkstone 笔记",
+		Description: "把文字或回复的图片、视频消息追加到 Inkstone 笔记",
 		Usage: []string{
 			"ink <简称> <内容>",
-			"ink <简称>（回复一条文字消息）",
+			"ink <简称>（回复文字、图片或视频消息）",
 			"ink <简称> -force（回复消息并强制重复写入）",
+			"ink new <简称> <标题>",
 			"ink find <标题或关键词>",
 			"ink bind <简称> <标题|#序号|笔记ID>",
 			"ink list",
@@ -101,6 +102,8 @@ func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 		return p.respondHTML(ctx, request, helpHTML(request.Prefix))
 	}
 	switch strings.ToLower(request.Args[0]) {
+	case "new", "create":
+		return p.create(ctx, request)
 	case "bind":
 		return p.bind(ctx, request)
 	case "find", "search":
@@ -116,6 +119,60 @@ func (p *Plugin) handle(ctx context.Context, request command.Request) error {
 	default:
 		return p.write(ctx, request)
 	}
+}
+
+func (p *Plugin) create(ctx context.Context, request command.Request) error {
+	alias, title, err := parseCreateRequest(request.RawArgs)
+	if err != nil {
+		return p.respond(ctx, request, "❌ "+err.Error()+"\n\n用法："+
+			request.Prefix+"ink new <简称> <标题>")
+	}
+	if err := validateAlias(alias); err != nil {
+		return p.respond(ctx, request, "❌ 简称无效："+err.Error())
+	}
+	bindings, err := p.loadBindings(ctx)
+	if err != nil {
+		return p.respond(ctx, request, "❌ 读取绑定失败："+err.Error())
+	}
+	if existing, exists := bindings[alias]; exists {
+		name := strings.TrimSpace(existing.Title)
+		if name == "" {
+			name = existing.NoteID
+		}
+		return p.respond(ctx, request,
+			"❌ 简称 “"+alias+"” 已绑定到 “"+name+"”。\n"+
+				"如需更换，请先执行 "+request.Prefix+"ink unbind "+alias,
+		)
+	}
+	client, err := p.client()
+	if err != nil {
+		return p.respond(ctx, request, "❌ "+err.Error())
+	}
+	operationID := stableCreateOperationID(
+		request.Message.ChatID,
+		request.Message.ID,
+		alias,
+		title,
+	)
+	created, err := client.createNote(ctx, operationID, title)
+	if err != nil {
+		return p.respond(ctx, request, "❌ 新建 Inkstone 笔记失败："+err.Error())
+	}
+	bindings[alias] = binding{
+		Alias:  alias,
+		NoteID: created.ID,
+		Title:  created.Title,
+	}
+	if err := p.saveBindings(ctx, bindings); err != nil {
+		return p.respond(ctx, request,
+			"❌ 笔记已新建，但保存简称失败。请再次执行原命令。",
+		)
+	}
+	name := strings.TrimSpace(created.Title)
+	if name == "" {
+		name = title
+	}
+	return p.respond(ctx, request, fmt.Sprintf("✅ 已新建并绑定：%s → %s", alias, name))
 }
 
 func (p *Plugin) bind(ctx context.Context, request command.Request) error {
@@ -275,7 +332,7 @@ func (p *Plugin) write(ctx context.Context, request command.Request) error {
 	if text == "" {
 		if request.Message.ReplyToID == 0 {
 			return p.respond(ctx, request,
-				"❌ 请在简称后输入内容，或回复一条文字消息后再执行命令。",
+				"❌ 请在简称后输入内容，或回复一条文字、图片或视频消息后再执行命令。",
 			)
 		}
 		messages, getErr := p.services.Telegram.GetMessages(
@@ -302,10 +359,6 @@ func (p *Plugin) write(ctx context.Context, request command.Request) error {
 	}
 
 	entryMessage = p.resolveCustomEmojiEntities(ctx, entryMessage)
-	entry, err := buildPlainEntry(entryMessage, source)
-	if err != nil {
-		return p.respond(ctx, request, "❌ "+err.Error())
-	}
 	client, err := p.client()
 	if err != nil {
 		return p.respond(ctx, request, "❌ "+err.Error())
@@ -316,7 +369,28 @@ func (p *Plugin) write(ctx context.Context, request command.Request) error {
 		operationMessageID = request.Message.ID
 	}
 	operationID := stableOperationID(request.Message.ChatID, operationMessageID, target.NoteID)
-	result, reused, err := p.executeWrite(ctx, client, target, operationID, entry)
+	prepareEntry := func() (string, error) {
+		mediaMarkdown := ""
+		if entryMessage.Media != nil || entryMessage.Sticker != nil {
+			media, mediaErr := p.downloadSupportedMedia(ctx, entryMessage)
+			if mediaErr != nil {
+				return "", mediaErr
+			}
+			attachment, uploadErr := client.uploadAttachment(
+				ctx,
+				target.NoteID,
+				media.FileName,
+				media.MIMEType,
+				media.Data,
+			)
+			if uploadErr != nil {
+				return "", uploadErr
+			}
+			mediaMarkdown = attachmentMarkdown(attachment, media.Kind)
+		}
+		return buildEntry(entryMessage, source, mediaMarkdown)
+	}
+	result, reused, err := p.executeWrite(ctx, client, target, operationID, prepareEntry)
 	if err != nil {
 		return p.respond(ctx, request, "❌ 写入 Inkstone 失败："+err.Error())
 	}
@@ -353,7 +427,7 @@ func (p *Plugin) executeWrite(
 	client *mcpClient,
 	target binding,
 	operationID string,
-	entry string,
+	prepareEntry func() (string, error),
 ) (editedNote, bool, error) {
 	key := "operation:" + operationID
 	for attempt := 0; attempt < 2; attempt++ {
@@ -365,9 +439,20 @@ func (p *Plugin) executeWrite(
 			return pending.Result, true, nil
 		}
 		if !found {
-			request, prepareErr := prepareWrite(ctx, client, target, operationID, entry)
-			if prepareErr != nil {
-				return editedNote{}, false, prepareErr
+			note, fetchErr := client.fetchNote(ctx, target.NoteID)
+			if fetchErr != nil {
+				return editedNote{}, false, fetchErr
+			}
+			entry, prepareEntryErr := prepareEntry()
+			if prepareEntryErr != nil {
+				return editedNote{}, false, prepareEntryErr
+			}
+			request := editRequest{
+				OperationID: operationID,
+				NoteID:      target.NoteID,
+				ExpectedRev: note.Rev,
+				Operation:   "append",
+				Text:        entry,
 			}
 			pending = pendingWrite{Version: 1, Request: request}
 			if err := p.savePending(ctx, key, pending); err != nil {
@@ -385,8 +470,12 @@ func (p *Plugin) executeWrite(
 			return result, false, nil
 		}
 		if attempt == 0 && isRevisionConflict(editErr) {
-			if err := p.services.Storage.Delete(ctx, pluginName, key); err != nil &&
-				!errors.Is(err, storage.ErrNotFound) {
+			note, fetchErr := client.fetchNote(ctx, target.NoteID)
+			if fetchErr != nil {
+				return editedNote{}, false, fetchErr
+			}
+			pending.Request.ExpectedRev = note.Rev
+			if err := p.savePending(ctx, key, pending); err != nil {
 				return editedNote{}, false, err
 			}
 			continue
@@ -394,27 +483,6 @@ func (p *Plugin) executeWrite(
 		return editedNote{}, false, editErr
 	}
 	return editedNote{}, false, errors.New("笔记版本持续变化，请稍后重试")
-}
-
-func prepareWrite(
-	ctx context.Context,
-	client *mcpClient,
-	target binding,
-	operationID string,
-	entry string,
-) (editRequest, error) {
-	note, err := client.fetchNote(ctx, target.NoteID)
-	if err != nil {
-		return editRequest{}, err
-	}
-	request := editRequest{
-		OperationID: operationID,
-		NoteID:      target.NoteID,
-		ExpectedRev: note.Rev,
-		Operation:   "append",
-		Text:        entry,
-	}
-	return request, nil
 }
 
 func (p *Plugin) resolveBindingTarget(
@@ -613,10 +681,23 @@ func validateAlias(value string) error {
 		return errors.New("简称需为不超过 32 个字符且不含空格的名称")
 	}
 	switch value {
-	case "bind", "unbind", "delete", "del", "find", "search", "list", "status", "test", "help":
+	case "new", "create", "bind", "unbind", "delete", "del", "find", "search", "list", "status", "test", "help":
 		return errors.New("该名称是插件命令，不能作为笔记简称")
 	}
 	return nil
+}
+
+func parseCreateRequest(raw string) (string, string, error) {
+	rest := afterFirstField(raw)
+	alias, title, ok := splitFirstField(rest)
+	title = strings.TrimSpace(title)
+	if !ok || title == "" {
+		return "", "", errors.New("请提供笔记简称和标题")
+	}
+	if len([]rune(title)) > 512 {
+		return "", "", errors.New("笔记标题不能超过 512 个字符")
+	}
+	return normalizeAlias(alias), title, nil
 }
 
 func parseBindRequest(raw string) (string, string, error) {
@@ -742,6 +823,18 @@ func stableOperationID(chatID int64, messageID int, noteID string) string {
 	return "tg_" + hex.EncodeToString(digest[:])
 }
 
+func stableCreateOperationID(chatID int64, messageID int, alias, title string) string {
+	value := fmt.Sprintf(
+		"telebox-inkstone-create|%d|%d|%s|%s",
+		chatID,
+		messageID,
+		normalizeAlias(alias),
+		strings.TrimSpace(title),
+	)
+	digest := sha256.Sum256([]byte(value))
+	return "tg_create_" + hex.EncodeToString(digest[:])
+}
+
 func isRevisionConflict(err error) bool {
 	var toolErr *mcpToolError
 	return errors.As(err, &toolErr) &&
@@ -768,7 +861,7 @@ func helpHTML(prefix string) string {
 
 const guideHTML = `<b>🪨 Inkstone 笔记写入</b>
 
-把 Telegram 中的文字、链接和消息来源保存到指定的 Inkstone 笔记。当前版本不上传图片、视频或文件。
+把 Telegram 中的文字、图片、视频、链接和消息来源保存到指定的 Inkstone 笔记。
 
 <b>一、先在 Inkstone 配置</b>
 1. 登录 Inkstone，打开“设置 → MCP”。
@@ -785,8 +878,14 @@ root 安装：<code>systemctl restart telebox.service</code>
 普通用户安装：<code>systemctl --user restart telebox.service</code>
 
 密钥不要发送到 Telegram，也不要写进插件命令。可用 <code>{{prefix}}ink test</code> 检查连接。
+图片和视频写入要求 Inkstone 服务端支持 API 密钥附件上传；旧版服务端仍可使用文字、新建和绑定功能，但需要先更新后才能上传媒体。
 
 <b>三、查找并绑定笔记</b>
+直接在 Telegram 新建一篇笔记并绑定简称：
+<code>{{prefix}}ink new hx 浩希</code>
+
+标题可以包含空格。简称已存在时不会覆盖原绑定；需要更换时先执行 <code>{{prefix}}ink unbind &lt;简称&gt;</code>。
+
 按标题或关键词查找：
 <code>{{prefix}}ink find 浩希</code>
 
@@ -804,10 +903,12 @@ root 安装：<code>systemctl restart telebox.service</code>
 直接写入：
 <code>{{prefix}}ink hx 火锅店 200</code>
 
-保存一条 Telegram 消息：先回复该消息，再发送：
+保存一条 Telegram 文字、图片或视频消息：先回复该消息，再发送：
 <code>{{prefix}}ink hx</code>
 
-回复写入会保留消息段落与已有文字格式，并在正文后另起一段保存正文外的链接和可取得的发送者、时间、聊天名称及消息链接。只有媒体、没有文字的消息暂不支持。
+图片和普通视频每个不能超过 25 MiB，可以只有媒体而没有文字。GIF、Telegram 动图、贴纸以及其他文件不会上传，并会直接提示不支持。图片保存在 Inkstone 私有附件存储中；视频会在笔记预览中显示播放器。附件地址不会发送到 Telegram，未登录 Inkstone 的访问者也不能读取。
+
+回复写入会保留消息段落与已有文字格式，并在正文后另起一段保存正文外的链接和可取得的发送者、时间、聊天名称及消息链接。
 
 同一条 Telegram 消息写入同一篇笔记后，再次执行会提示“未重复追加”。确实需要再次写入时，回复原消息发送：
 <code>{{prefix}}ink hx -force</code>
@@ -818,6 +919,7 @@ root 安装：<code>systemctl restart telebox.service</code>
 写入成功后只显示笔记标题，不发送笔记地址。
 
 <b>管理命令</b>
+<code>{{prefix}}ink new &lt;简称&gt; &lt;标题&gt;</code> 新建并绑定笔记
 <code>{{prefix}}ink find &lt;关键词&gt;</code> 查找笔记
 <code>{{prefix}}ink list</code> 查看所有绑定
 <code>{{prefix}}ink unbind &lt;简称&gt;</code> 删除绑定
