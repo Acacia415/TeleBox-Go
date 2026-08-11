@@ -41,6 +41,7 @@ const (
 	MethodTelegramResolveUser               = "telegram.resolve_user"
 	MethodTelegramResolveChat               = "telegram.resolve_chat"
 	MethodTelegramResolveChatTarget         = "telegram.resolve_chat_target"
+	MethodTelegramResolveCustomEmoji        = "telegram.resolve_custom_emoji"
 	MethodTelegramGetMyPermissions          = "telegram.get_my_permissions"
 	MethodTelegramGetChatMember             = "telegram.get_chat_member"
 	MethodTelegramFindJoinTime              = "telegram.find_join_time"
@@ -145,6 +146,10 @@ type TargetRequest struct {
 
 type ChatRequest struct {
 	ChatID int64 `json:"chat_id"`
+}
+
+type CustomEmojiRequest struct {
+	DocumentIDs []int64 `json:"document_ids"`
 }
 
 type MemberRequest struct {

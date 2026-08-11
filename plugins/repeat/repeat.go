@@ -27,7 +27,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "re",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "复读回复的消息",
 	}
 }
@@ -145,12 +145,9 @@ func parseArgs(args []string) (int, int, error) {
 }
 
 func messageRange(replyToID, count int) []int {
-	start := replyToID - count + 1
-	if start < 1 {
-		start = 1
-	}
-	result := make([]int, 0, replyToID-start+1)
-	for id := start; id <= replyToID; id++ {
+	end := replyToID + count - 1
+	result := make([]int, 0, count)
+	for id := replyToID; id <= end; id++ {
 		result = append(result, id)
 	}
 	return result
@@ -161,6 +158,6 @@ const repeatGuideHTML = `<b>复读消息</b>
 回复一条消息后发送：
 <code>{{prefix}}re [消息数] [复读次数]</code>
 
-<code>消息数</code> 表示从被回复消息开始连续处理多少条消息；<code>复读次数</code> 表示整组发送多少遍。两项不填时均为 1。
+<code>消息数</code> 表示从被回复消息开始，向后连续处理多少条消息；<code>复读次数</code> 表示整组发送多少遍。两项不填时均为 1。
 
 插件优先转发原消息；对话禁止转发时会改为复制可复制的文字或媒体内容。`

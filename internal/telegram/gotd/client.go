@@ -52,10 +52,11 @@ type Client struct {
 	runMu sync.Mutex
 	mu    sync.RWMutex
 
-	handler   teleboxtelegram.MessageHandler
-	sender    *message.Sender
-	selfID    int64
-	peerCache map[int64]tg.InputPeerClass
+	handler          teleboxtelegram.MessageHandler
+	sender           *message.Sender
+	selfID           int64
+	peerCache        map[int64]tg.InputPeerClass
+	customEmojiCache map[int64]string
 }
 
 func New(cfg Config) (*Client, error) {
@@ -84,9 +85,10 @@ func New(cfg Config) (*Client, error) {
 
 	dispatcher := tg.NewUpdateDispatcher()
 	client := &Client{
-		config:     cfg,
-		dispatcher: dispatcher,
-		peerCache:  make(map[int64]tg.InputPeerClass),
+		config:           cfg,
+		dispatcher:       dispatcher,
+		peerCache:        make(map[int64]tg.InputPeerClass),
+		customEmojiCache: make(map[int64]string),
 	}
 	client.loggedIn = qrlogin.OnLoginToken(dispatcher)
 	dispatcher.OnNewMessage(client.onNewMessage)

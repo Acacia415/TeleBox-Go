@@ -19,13 +19,14 @@ TeleBox 的 Go 重构版本，使用 `gotd/td` 连接 Telegram。主程序只内
 - [ ] 其余未移植插件业务数据库的逐插件转换（原文件已完整保留）
 - [ ] Linux 隔离账号端到端验收
 
-本仓库提供全量备份中实际安装过的插件，以及后来单独确认迁移的
-`pmcaptcha` 私聊验证插件：
+本仓库提供全量备份中实际安装过的插件，以及后来单独增加的
+`pmcaptcha` 私聊验证和 `inkstone` 笔记写入插件：
 
 - 查询与工具：`bin`、`convert`、`dc`、`dig`、`ids`、`ip`、`isalive`、
   `jointime`、`rate`、`search`、`trace`
 - 消息与管理：`aban`、`bulk_delete`、`cezi`、`re`
 - 隐私与防护：`pmcaptcha`
+- 笔记与效率：`inkstone`
 - 媒体与贴纸：`eat`、`eatgif`、`gif`、`nsticker`、`yvlu`、`zhijiao`
 - AI 与下载：`ai`、`yt-dlp`
 - 系统与备份：`speedlink`、`telegram-backup`
@@ -164,6 +165,26 @@ Linux 插件 ZIP 通过独立插件版本按需发布，不会在安装主程序
 会调用原插件使用的 `@PagerMaid_Sam_Bot`，启用时会在 Telegram 内再次说明。
 Go 版不包含原插件的第三方日志上报、硬编码放行用户、远程语言脚本执行或
 任意 Python 规则执行；自定义规则改为受限表达式，配置码只在本机生成。
+
+Inkstone 插件可将 Telegram 文字、链接和消息来源写入个人笔记：
+
+```text
+-p i inkstone
+-help inkstone
+-ink test
+```
+
+API 密钥只保存在服务器的 `~/.config/telebox/telebox.env` 中，不通过
+Telegram 命令设置或显示。可以使用 `-ink find <关键词>` 查找笔记，并按
+标题或搜索结果编号直接绑定，无需手动查看笔记 ID。当前版本保留原消息的
+段落及粗体、斜体、下划线、删除线、等宽、代码块、引用和链接；普通文字
+中的 Markdown/HTML 标记会被转义。普通 Emoji 原样保留，自定义 Emoji
+转换为对应的普通 Emoji，无法识别的占位符不会写入。插件不会意外生成
+任务列表或折叠区块，也不会在 Telegram 中发送笔记地址。图片、视频或文件
+暂不上传。完整配置方式见使用手册。
+
+回复同一条消息重复写入时会明确提示已跳过；需要再次追加可使用
+`-ink <简称> -force`。
 
 框架备份可直接在 Telegram 中完成。`-bf` 备份插件与运行数据，`-bf all`
 另外包含 JSON 配置；回复备份文件发送 `-hf` 会先完整校验，重启后再恢复。

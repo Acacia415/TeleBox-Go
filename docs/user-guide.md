@@ -304,6 +304,104 @@ journalctl --user -u telebox.service -f
 插件包从项目的 GitHub Release 下载，并检查 HTTPS、文件大小和
 SHA-256。插件在独立子进程中运行，单个插件退出不会直接带停主程序。
 
+### Inkstone 笔记写入
+
+安装插件：
+
+```text
+-p i inkstone
+-help inkstone
+```
+
+先登录 Inkstone，在“设置 → MCP”中启用 MCP，开放“读取笔记”和“编辑
+笔记”，不要开放回收站权限。创建名为 `TeleBox` 的 API 密钥并立即复制。
+然后编辑服务器上的环境文件：
+
+```bash
+nano ~/.config/telebox/telebox.env
+```
+
+加入以下两行。MCP 地址必须从你自己的 Inkstone“设置 → MCP”页面复制：
+
+```text
+INKSTONE_MCP_URL=https://inkstone.example.com/mcp
+INKSTONE_API_KEY=ink_你的密钥
+```
+
+保存后重启服务并检查连接：
+
+```bash
+systemctl restart telebox.service
+```
+
+如果 TeleBox 由普通用户安装，请改用
+`systemctl --user restart telebox.service`。
+
+```text
+-ink test
+```
+
+API 密钥不要发送到 Telegram。先按标题或关键词查找笔记，再设置一个容易
+记住的简称：
+
+```text
+-ink find 浩希
+-ink bind hx 浩希
+-ink hx 火锅店 200
+```
+
+标题唯一时会直接绑定。如果返回多个结果，按编号选择，例如：
+
+```text
+-ink bind hx #2
+```
+
+搜索结果保留 30 分钟，仅用于当前聊天中的后续选择。为了兼容已有使用方式，
+绑定命令仍接受 26 位笔记 ID 或包含 `/n/笔记ID` 的完整链接。
+
+回复一条 Telegram 文字消息后只发送 `-ink hx`，插件会保存正文、正文外
+的链接，以及可以取得的发送者、时间、聊天名称和消息链接。
+
+当前版本只在笔记末尾追加内容。插件会保留原消息的换行，并将 Telegram
+已有的粗体、斜体、下划线、删除线、等宽、代码块、引用和文字链接转换为
+Inkstone 支持的 Markdown。未设置格式的 Markdown 或 HTML 标记会被转义，
+例如普通文字 `<details>` 不会被误认为折叠区块。不同写入之间会留出空行，
+来源信息也会作为独立的普通文本段落附在正文后。
+
+普通 Emoji 会原样保留。Telegram 自定义 Emoji 会转换为它对应的普通
+Unicode Emoji；无法解析的空白占位符不会写入，因此不会在笔记中留下方框。
+
+Telegram 剧透在 Inkstone 中以高亮显示，因为 Inkstone 没有与 Telegram
+完全相同的点击揭示语法；折叠引用会保留为普通引用，不额外创建折叠块。
+
+写入成功后，Telegram 只显示笔记标题，不会发送 Inkstone 笔记地址。这样
+可以避免在群聊或转发消息中意外暴露访问链接。
+
+同一条 Telegram 消息写入同一篇笔记后，再次执行不会重复追加，并会明确
+提示已经跳过。确实需要再次写入时，回复原消息发送：
+
+```text
+-ink hx -force
+```
+
+直接输入内容也支持强制写入：
+
+```text
+-ink hx -force 火锅店 200
+```
+
+管理绑定与查看状态：
+
+```text
+-ink find <关键词>
+-ink list
+-ink unbind hx
+-ink status
+-ink help
+```
+
+当前版本只处理文字、链接和消息说明；图片、视频、语音和文件不会上传。
+
 ### PMCaptcha 私聊验证
 
 安装并查看说明：

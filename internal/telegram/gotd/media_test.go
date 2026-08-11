@@ -109,6 +109,8 @@ func TestStableMessageIncludesPortableMediaAndReply(t *testing.T) {
 			URL:    "https://example.com",
 		},
 		&tg.MessageEntityCustomEmoji{Offset: 7, Length: 2, DocumentID: 123},
+		&tg.MessageEntityPre{Offset: 0, Length: 7, Language: "go"},
+		&tg.MessageEntityBlockquote{Collapsed: true, Offset: 0, Length: 7},
 	}
 	documentMedia := &tg.MessageMediaDocument{}
 	documentMedia.SetDocument(&tg.Document{
@@ -136,11 +138,15 @@ func TestStableMessageIncludesPortableMediaAndReply(t *testing.T) {
 		got.ReplyEntities[0].Type != "italic" {
 		t.Fatalf("stableMessage().ReplyEntities = %+v", got.ReplyEntities)
 	}
-	if len(got.Entities) != 3 ||
+	if len(got.Entities) != 5 ||
 		got.Entities[0].Type != "bold" ||
 		got.Entities[1].Type != "text_link" ||
 		got.Entities[1].URL != "https://example.com" ||
-		got.Entities[2].DocumentID != 123 {
+		got.Entities[2].DocumentID != 123 ||
+		got.Entities[3].Type != "pre" ||
+		got.Entities[3].Language != "go" ||
+		got.Entities[4].Type != "blockquote" ||
+		!got.Entities[4].Collapsed {
 		t.Fatalf("stableMessage().Entities = %+v", got.Entities)
 	}
 }

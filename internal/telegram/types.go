@@ -200,8 +200,11 @@ type MessageEntity struct {
 	Offset     int
 	Length     int
 	URL        string
+	Language   string
+	Collapsed  bool
 	UserID     int64
 	DocumentID int64
+	Emoji      string
 }
 
 type Message struct {

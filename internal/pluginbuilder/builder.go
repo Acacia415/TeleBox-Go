@@ -230,7 +230,7 @@ func AnalyzePermissions(sourceDir string) (pluginapi.Permissions, error) {
 			if identifier, ok := selector.X.(*ast.Ident); ok &&
 				identifier.Name == "telegram" {
 				switch selector.Sel.Name {
-				case "SendHTML", "ReplyHTML", "EditHTML":
+				case "SendHTML", "ReplyHTML", "EditHTML", "ResolveCustomEmoji":
 					telegramMethods[camelToSnake(selector.Sel.Name)] = struct{}{}
 				}
 			}

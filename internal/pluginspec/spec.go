@@ -29,6 +29,7 @@ var catalog = []Spec{
 	{Name: "eatgif", Package: modulePath + "/plugins/eat", Constructor: "NewGIF", SourceDir: "plugins/eat"},
 	{Name: "gif", Package: modulePath + "/plugins/gif", Constructor: "New", SourceDir: "plugins/gif"},
 	{Name: "ids", Package: modulePath + "/plugins/ids", Constructor: "New", SourceDir: "plugins/ids"},
+	{Name: "inkstone", Package: modulePath + "/plugins/inkstone", Constructor: "New", SourceDir: "plugins/inkstone", MinHost: "0.8.3"},
 	{Name: "ip", Package: modulePath + "/plugins/iplookup", Constructor: "New", SourceDir: "plugins/iplookup"},
 	{Name: "isalive", Package: modulePath + "/plugins/isalive", Constructor: "New", SourceDir: "plugins/isalive"},
 	{Name: "jointime", Package: modulePath + "/plugins/jointime", Constructor: "New", SourceDir: "plugins/jointime"},
