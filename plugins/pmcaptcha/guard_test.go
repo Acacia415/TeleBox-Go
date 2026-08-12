@@ -1,8 +1,12 @@
 package pmcaptcha
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -45,11 +49,14 @@ func (s *testStorage) Put(
 
 type testTelegram struct {
 	telegram.Client
-	mu          sync.Mutex
-	nextID      int
-	quarantined map[int64]bool
-	blocked     map[int64]bool
-	deleted     [][]int
+	mu              sync.Mutex
+	nextID          int
+	quarantined     map[int64]bool
+	blocked         map[int64]bool
+	deleted         [][]int
+	reported        []int64
+	operations      []string
+	unarchiveOnSend bool
 }
 
 func (c *testTelegram) SendText(
@@ -60,6 +67,10 @@ func (c *testTelegram) SendText(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nextID++
+	c.operations = append(c.operations, "send_text")
+	if c.unarchiveOnSend {
+		c.quarantined[chatID] = false
+	}
 	return telegram.SentMessage{ChatID: chatID, MessageID: c.nextID}, nil
 }
 
@@ -82,6 +93,10 @@ func (c *testTelegram) SetPrivateChatQuarantined(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.quarantined[userID] = enabled
+	c.operations = append(
+		c.operations,
+		fmt.Sprintf("quarantine:%t", enabled),
+	)
 	return nil
 }
 
@@ -89,6 +104,7 @@ func (c *testTelegram) BlockUser(_ context.Context, userID int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.blocked[userID] = true
+	c.operations = append(c.operations, "block")
 	return nil
 }
 
@@ -99,7 +115,11 @@ func (c *testTelegram) UnblockUser(_ context.Context, userID int64) error {
 	return nil
 }
 
-func (c *testTelegram) ReportSpam(context.Context, int64) error {
+func (c *testTelegram) ReportSpam(_ context.Context, userID int64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reported = append(c.reported, userID)
+	c.operations = append(c.operations, "report")
 	return nil
 }
 
@@ -114,11 +134,75 @@ func newGuardTestPlugin(t *testing.T) (*Plugin, *testTelegram) {
 		blocked:     make(map[int64]bool),
 	}
 	store := &testStorage{values: make(map[string][]byte)}
-	p := New(service.Container{Telegram: client, Storage: store})
+	p := New(service.Container{
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Telegram: client,
+		Storage:  store,
+	})
 	p.state.Config.Silent = true
 	p.runCtx, p.cancel = context.WithCancel(context.Background())
 	t.Cleanup(p.cancel)
 	return p, client
+}
+
+func TestPunishBanRestoresArchiveAfterFailureNotice(t *testing.T) {
+	t.Parallel()
+	p, client := newGuardTestPlugin(t)
+	const userID = int64(44)
+	client.unarchiveOnSend = true
+
+	err := p.punish(
+		context.Background(),
+		userID,
+		Config{Action: "ban", Report: true, Silent: false},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if !client.blocked[userID] {
+		t.Fatal("action=ban did not block the user")
+	}
+	if !client.quarantined[userID] {
+		t.Fatal("action=ban did not restore the final archive state")
+	}
+	if len(client.reported) != 1 || client.reported[0] != userID {
+		t.Fatalf("reported users = %v", client.reported)
+	}
+	want := []string{"send_text", "report", "block", "quarantine:true"}
+	if fmt.Sprint(client.operations) != fmt.Sprint(want) {
+		t.Fatalf("operations = %v, want %v", client.operations, want)
+	}
+}
+
+func TestPunishActionsAreLoggedWithoutDetailedLogs(t *testing.T) {
+	t.Parallel()
+	p, _ := newGuardTestPlugin(t)
+	var output bytes.Buffer
+	p.services.Logger = slog.New(slog.NewTextHandler(&output, nil))
+
+	if err := p.punish(
+		context.Background(),
+		45,
+		Config{Action: "ban", Report: true, Silent: true},
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := output.String()
+	for _, operation := range []string{
+		"report_spam",
+		"block_user",
+		"final_archive",
+	} {
+		if !strings.Contains(logs, "operation="+operation) {
+			t.Fatalf("logs do not contain %q: %s", operation, logs)
+		}
+	}
 }
 
 func TestMathChallengeCompletesAndPersists(t *testing.T) {
