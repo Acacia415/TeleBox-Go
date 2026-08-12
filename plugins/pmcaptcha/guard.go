@@ -165,11 +165,9 @@ func (p *Plugin) startChallenge(
 		userID,
 		true,
 	); err != nil {
-		p.services.Logger.Warn(
-			"quarantine private chat",
-			"user_id", userID,
-			"error", err,
-		)
+		p.logActionResult("initial_archive", userID, err)
+	} else {
+		p.logActionResult("initial_archive", userID, nil)
 	}
 	switch challengeType {
 	case "sticker":
@@ -517,41 +515,87 @@ func (p *Plugin) punish(
 			userID,
 			"❌ 验证未通过",
 		)
+		p.collectActionResult(
+			"send_failure_notice",
+			userID,
+			err,
+			&operationErrors,
+		)
 		if err == nil {
 			p.deleteLater(userID, sent.MessageID, 3*time.Second)
 		}
 	}
 	switch config.Action {
 	case "none":
-		if err := p.services.Telegram.SetPrivateChatQuarantined(
+		err := p.services.Telegram.SetPrivateChatQuarantined(
 			ctx,
 			userID,
 			false,
-		); err != nil {
-			operationErrors = append(operationErrors, err)
-		}
+		)
+		p.collectActionResult(
+			"release_archive",
+			userID,
+			err,
+			&operationErrors,
+		)
 		return errors.Join(operationErrors...)
 	case "delete":
 		if config.Report && canReport {
-			if err := p.services.Telegram.ReportSpam(ctx, userID); err != nil {
-				operationErrors = append(operationErrors, err)
-			}
+			p.collectActionResult(
+				"report_spam",
+				userID,
+				p.services.Telegram.ReportSpam(ctx, userID),
+				&operationErrors,
+			)
+		} else if config.Report {
+			p.logActionSkipped(
+				"report_spam",
+				userID,
+				"Telegram 当前未提供举报入口",
+			)
 		}
-		if err := p.services.Telegram.BlockUser(ctx, userID); err != nil {
-			operationErrors = append(operationErrors, err)
-		}
-		if err := p.services.Telegram.DeletePrivateHistory(ctx, userID); err != nil {
-			operationErrors = append(operationErrors, err)
-		}
+		p.collectActionResult(
+			"block_user",
+			userID,
+			p.services.Telegram.BlockUser(ctx, userID),
+			&operationErrors,
+		)
+		p.collectActionResult(
+			"delete_history",
+			userID,
+			p.services.Telegram.DeletePrivateHistory(ctx, userID),
+			&operationErrors,
+		)
 	default:
 		if config.Report && canReport {
-			if err := p.services.Telegram.ReportSpam(ctx, userID); err != nil {
-				operationErrors = append(operationErrors, err)
-			}
+			p.collectActionResult(
+				"report_spam",
+				userID,
+				p.services.Telegram.ReportSpam(ctx, userID),
+				&operationErrors,
+			)
+		} else if config.Report {
+			p.logActionSkipped(
+				"report_spam",
+				userID,
+				"Telegram 当前未提供举报入口",
+			)
 		}
-		if err := p.services.Telegram.BlockUser(ctx, userID); err != nil {
-			operationErrors = append(operationErrors, err)
-		}
+		p.collectActionResult(
+			"block_user",
+			userID,
+			p.services.Telegram.BlockUser(ctx, userID),
+			&operationErrors,
+		)
+		// Sending the failure notice may move an archived conversation back to
+		// the main list. Reapply the archive and mute state after all outgoing
+		// messages and moderation calls so action=ban has a stable final state.
+		p.collectActionResult(
+			"final_archive",
+			userID,
+			p.services.Telegram.SetPrivateChatQuarantined(ctx, userID, true),
+			&operationErrors,
+		)
 	}
 	if joined := errors.Join(operationErrors...); joined != nil {
 		p.services.Logger.Warn(
@@ -561,6 +605,53 @@ func (p *Plugin) punish(
 		)
 	}
 	return nil
+}
+
+func (p *Plugin) collectActionResult(
+	action string,
+	userID int64,
+	err error,
+	operationErrors *[]error,
+) {
+	p.logActionResult(action, userID, err)
+	if err != nil {
+		*operationErrors = append(
+			*operationErrors,
+			fmt.Errorf("%s: %w", action, err),
+		)
+	}
+}
+
+func (p *Plugin) logActionResult(action string, userID int64, err error) {
+	if p.services.Logger == nil {
+		return
+	}
+	if err != nil {
+		p.services.Logger.Warn(
+			"PMCaptcha 操作失败",
+			"operation", action,
+			"user_id", userID,
+			"error", err,
+		)
+		return
+	}
+	p.services.Logger.Info(
+		"PMCaptcha 操作成功",
+		"operation", action,
+		"user_id", userID,
+	)
+}
+
+func (p *Plugin) logActionSkipped(action string, userID int64, reason string) {
+	if p.services.Logger == nil {
+		return
+	}
+	p.services.Logger.Info(
+		"PMCaptcha 操作跳过",
+		"operation", action,
+		"user_id", userID,
+		"reason", reason,
+	)
 }
 
 func (p *Plugin) punishDirect(
