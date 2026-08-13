@@ -30,7 +30,7 @@ func (p *Plugin) handleCommand(
 	case "status":
 		return p.respond(ctx, request, p.statusText())
 	case "version", "v", "ver":
-		return p.respond(ctx, request, "PMCaptcha-Go v0.1.1")
+		return p.respond(ctx, request, "PMCaptcha-Go v0.1.2")
 	case "check":
 		return p.commandCheck(ctx, request, firstArg(args))
 	case "add":
