@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Acacia415/TeleBox-Go/internal/service"
 	"github.com/Acacia415/TeleBox-Go/internal/storage"
@@ -49,14 +50,15 @@ func (s *testStorage) Put(
 
 type testTelegram struct {
 	telegram.Client
-	mu              sync.Mutex
-	nextID          int
-	quarantined     map[int64]bool
-	blocked         map[int64]bool
-	deleted         [][]int
-	reported        []int64
-	operations      []string
-	unarchiveOnSend bool
+	mu                sync.Mutex
+	nextID            int
+	quarantined       map[int64]bool
+	blocked           map[int64]bool
+	deleted           [][]int
+	reported          []int64
+	operations        []string
+	unarchiveOnSend   bool
+	unarchiveOnDelete bool
 }
 
 func (c *testTelegram) SendText(
@@ -76,12 +78,16 @@ func (c *testTelegram) SendText(
 
 func (c *testTelegram) DeleteMessages(
 	_ context.Context,
-	_ int64,
+	chatID int64,
 	messageIDs []int,
 ) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.deleted = append(c.deleted, append([]int(nil), messageIDs...))
+	c.operations = append(c.operations, "delete_messages")
+	if c.unarchiveOnDelete {
+		c.quarantined[chatID] = false
+	}
 	return nil
 }
 
@@ -203,6 +209,47 @@ func TestPunishActionsAreLoggedWithoutDetailedLogs(t *testing.T) {
 			t.Fatalf("logs do not contain %q: %s", operation, logs)
 		}
 	}
+}
+
+func TestArchiveRetriesRestoreDelayedFinalState(t *testing.T) {
+	t.Parallel()
+	p, client := newGuardTestPlugin(t)
+	const userID = int64(46)
+
+	client.mu.Lock()
+	client.quarantined[userID] = false
+	client.mu.Unlock()
+	p.scheduleArchiveRetries(
+		userID,
+		[]time.Duration{time.Millisecond, 2 * time.Millisecond},
+	)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		client.mu.Lock()
+		archived := client.quarantined[userID]
+		operations := append([]string(nil), client.operations...)
+		client.mu.Unlock()
+		if archived {
+			if !containsString(operations, "quarantine:true") {
+				t.Fatalf("operations = %v", operations)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("archive retry did not converge: %v", operations)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMathChallengeCompletesAndPersists(t *testing.T) {

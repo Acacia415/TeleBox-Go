@@ -596,6 +596,14 @@ func (p *Plugin) punish(
 			p.services.Telegram.SetPrivateChatQuarantined(ctx, userID, true),
 			&operationErrors,
 		)
+		// Telegram may emit delayed updates for reporting, blocking and deleting
+		// the temporary failure notice after the archive RPC has succeeded. Those
+		// updates can move the dialog back to the main list, so converge on the
+		// desired final state again after they have settled.
+		p.scheduleArchiveRetries(
+			userID,
+			[]time.Duration{5 * time.Second, 15 * time.Second},
+		)
 	}
 	if joined := errors.Join(operationErrors...); joined != nil {
 		p.services.Logger.Warn(
@@ -652,6 +660,50 @@ func (p *Plugin) logActionSkipped(action string, userID int64, reason string) {
 		"user_id", userID,
 		"reason", reason,
 	)
+}
+
+func (p *Plugin) scheduleArchiveRetries(
+	userID int64,
+	delays []time.Duration,
+) {
+	p.mu.Lock()
+	runCtx := p.runCtx
+	p.mu.Unlock()
+	if runCtx == nil || len(delays) == 0 {
+		return
+	}
+	go func() {
+		elapsed := time.Duration(0)
+		for index, target := range delays {
+			wait := target - elapsed
+			if wait < 0 {
+				wait = 0
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-runCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			elapsed = target
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				15*time.Second,
+			)
+			err := p.services.Telegram.SetPrivateChatQuarantined(
+				ctx,
+				userID,
+				true,
+			)
+			cancel()
+			p.logActionResult(
+				fmt.Sprintf("archive_retry_%d", index+1),
+				userID,
+				err,
+			)
+		}
+	}()
 }
 
 func (p *Plugin) punishDirect(
@@ -792,12 +844,13 @@ func (p *Plugin) deleteLater(userID int64, messageID int, delay time.Duration) {
 			return
 		case <-timer.C:
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			_ = p.services.Telegram.DeleteMessages(
+			err := p.services.Telegram.DeleteMessages(
 				ctx,
 				userID,
 				[]int{messageID},
 			)
+			cancel()
+			p.logActionResult("delete_temporary_notice", userID, err)
 		}
 	}()
 }
