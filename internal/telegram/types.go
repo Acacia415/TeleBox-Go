@@ -110,6 +110,10 @@ type ChatPermissions struct {
 type PrivateChatSettings struct {
 	CanReportSpam bool
 	AutoArchived  bool
+	FolderKnown   bool
+	DialogExists  bool
+	FolderID      int
+	Archived      bool
 }
 
 type HistoryQuery struct {

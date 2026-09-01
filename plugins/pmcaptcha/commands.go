@@ -30,7 +30,7 @@ func (p *Plugin) handleCommand(
 	case "status":
 		return p.respond(ctx, request, p.statusText())
 	case "version", "v", "ver":
-		return p.respond(ctx, request, "PMCaptcha-Go v0.1.2")
+		return p.respond(ctx, request, "PMCaptcha-Go v0.1.3")
 	case "check":
 		return p.commandCheck(ctx, request, firstArg(args))
 	case "add":
@@ -1248,7 +1248,7 @@ var commandHelp = map[string]string{
 		"用法：{{prefix}}pmcaptcha disable_pm <on|off>",
 	"stats": "查看通过、失败和洪水拦截数量；加 reset 可清零统计。\n" +
 		"用法：{{prefix}}pmcaptcha stats [reset]",
-	"action": "设置验证失败后的处理方式：ban 仅拉黑，delete 拉黑并删除私聊，none 不处理。\n" +
+	"action": "设置验证失败后的处理方式：ban 拉黑并归档，delete 拉黑并删除私聊，none 不处理。\n" +
 		"用法：{{prefix}}pmcaptcha action <ban|delete|none>",
 	"report": "设置验证失败后是否向 Telegram 举报垃圾消息。此项与 action 分开控制。\n" +
 		"用法：{{prefix}}pmcaptcha report <on|off>",
@@ -1295,7 +1295,7 @@ func helpText(prefix string) string {
 		"快速设置\n" +
 		prefix + "pmcaptcha type math  设置数学验证\n" +
 		prefix + "pmcaptcha timeout 120 math  限时 120 秒\n" +
-		prefix + "pmcaptcha action ban  失败后拉黑\n" +
+		prefix + "pmcaptcha action ban  失败后拉黑并归档\n" +
 		prefix + "pmcaptcha report on  失败后举报\n" +
 		prefix + "pmcaptcha settings  查看当前设置\n\n" +
 		"用户管理\n" +
@@ -1322,7 +1322,7 @@ const guideHTML = `<b>🛡️ PMCaptcha 私聊验证</b>
 <b>快速设置</b>
 <code>{{prefix}}pmcaptcha type math</code> 使用数学验证
 <code>{{prefix}}pmcaptcha timeout 120 math</code> 限时 120 秒
-<code>{{prefix}}pmcaptcha action ban</code> 失败后拉黑
+<code>{{prefix}}pmcaptcha action ban</code> 失败后拉黑并归档
 <code>{{prefix}}pmcaptcha report on</code> 失败后举报
 <code>{{prefix}}pmcaptcha settings</code> 查看当前设置
 

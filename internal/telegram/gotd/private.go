@@ -67,6 +67,16 @@ func (c *Client) DeletePrivateHistory(ctx context.Context, userID int64) error {
 			return fmt.Errorf("delete private history: %w", err)
 		}
 		if result.Offset == 0 {
+			exists, folderID, err := c.getPrivateDialogFolder(ctx, peer)
+			if err != nil {
+				return fmt.Errorf("verify deleted private history: %w", err)
+			}
+			if exists {
+				return fmt.Errorf(
+					"verify deleted private history: dialog still exists in folder %d",
+					folderID,
+				)
+			}
 			return nil
 		}
 	}
@@ -88,10 +98,53 @@ func (c *Client) GetPrivateChatSettings(
 			err,
 		)
 	}
+	dialogExists, folderID, err := c.getPrivateDialogFolder(ctx, peer)
+	if err != nil {
+		return teleboxtelegram.PrivateChatSettings{}, fmt.Errorf(
+			"get private chat folder: %w",
+			err,
+		)
+	}
 	return teleboxtelegram.PrivateChatSettings{
 		CanReportSpam: result.Settings.GetReportSpam(),
 		AutoArchived:  result.Settings.GetAutoarchived(),
+		FolderKnown:   true,
+		DialogExists:  dialogExists,
+		FolderID:      folderID,
+		Archived:      dialogExists && folderID == 1,
 	}, nil
+}
+
+func (c *Client) getPrivateDialogFolder(
+	ctx context.Context,
+	peer tg.InputPeerClass,
+) (bool, int, error) {
+	result, err := c.raw.API().MessagesGetPeerDialogs(
+		ctx,
+		[]tg.InputDialogPeerClass{&tg.InputDialogPeer{Peer: peer}},
+	)
+	if err != nil {
+		return false, 0, err
+	}
+	return privateDialogFolder(result)
+}
+
+func privateDialogFolder(result *tg.MessagesPeerDialogs) (bool, int, error) {
+	if result == nil {
+		return false, 0, errors.New("get peer dialogs returned no result")
+	}
+	if len(result.Dialogs) == 0 {
+		return false, 0, nil
+	}
+	dialog, ok := result.Dialogs[0].(*tg.Dialog)
+	if !ok {
+		return false, 0, fmt.Errorf(
+			"get peer dialogs returned %T instead of a private dialog",
+			result.Dialogs[0],
+		)
+	}
+	folderID, _ := dialog.GetFolderID()
+	return true, folderID, nil
 }
 
 func (c *Client) SetPrivateChatQuarantined(
