@@ -44,7 +44,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "pmcaptcha",
-		Version:     "0.1.2",
+		Version:     "0.1.3",
 		Description: "陌生人私聊验证、过滤与反洪水保护",
 	}
 }

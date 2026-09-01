@@ -160,11 +160,7 @@ func (p *Plugin) startChallenge(
 	}
 	p.mu.Unlock()
 
-	if err := p.services.Telegram.SetPrivateChatQuarantined(
-		ctx,
-		userID,
-		true,
-	); err != nil {
+	if err := p.setPrivateChatQuarantined(ctx, userID, true); err != nil {
 		p.logActionResult("initial_archive", userID, err)
 	} else {
 		p.logActionResult("initial_archive", userID, nil)
@@ -447,11 +443,7 @@ func (p *Plugin) completeChallenge(ctx context.Context, userID int64) error {
 			operationErrors = append(operationErrors, err)
 		}
 	}
-	if err := p.services.Telegram.SetPrivateChatQuarantined(
-		ctx,
-		userID,
-		false,
-	); err != nil {
+	if err := p.setPrivateChatQuarantined(ctx, userID, false); err != nil {
 		operationErrors = append(operationErrors, err)
 	}
 	p.deleteChallengeMessages(ctx, userID, challenge.MessageIDs)
@@ -521,17 +513,13 @@ func (p *Plugin) punish(
 			err,
 			&operationErrors,
 		)
-		if err == nil {
+		if err == nil && config.Action != "delete" {
 			p.deleteLater(userID, sent.MessageID, 3*time.Second)
 		}
 	}
 	switch config.Action {
 	case "none":
-		err := p.services.Telegram.SetPrivateChatQuarantined(
-			ctx,
-			userID,
-			false,
-		)
+		err := p.setPrivateChatQuarantined(ctx, userID, false)
 		p.collectActionResult(
 			"release_archive",
 			userID,
@@ -563,8 +551,12 @@ func (p *Plugin) punish(
 		p.collectActionResult(
 			"delete_history",
 			userID,
-			p.services.Telegram.DeletePrivateHistory(ctx, userID),
+			p.deletePrivateHistory(ctx, userID),
 			&operationErrors,
+		)
+		p.scheduleDeleteRetries(
+			userID,
+			[]time.Duration{5 * time.Second, 15 * time.Second},
 		)
 	default:
 		if config.Report && canReport {
@@ -593,7 +585,7 @@ func (p *Plugin) punish(
 		p.collectActionResult(
 			"final_archive",
 			userID,
-			p.services.Telegram.SetPrivateChatQuarantined(ctx, userID, true),
+			p.setPrivateChatQuarantined(ctx, userID, true),
 			&operationErrors,
 		)
 		// Telegram may emit delayed updates for reporting, blocking and deleting
@@ -691,11 +683,7 @@ func (p *Plugin) scheduleArchiveRetries(
 				context.Background(),
 				15*time.Second,
 			)
-			err := p.services.Telegram.SetPrivateChatQuarantined(
-				ctx,
-				userID,
-				true,
-			)
+			err := p.setPrivateChatQuarantined(ctx, userID, true)
 			cancel()
 			p.logActionResult(
 				fmt.Sprintf("archive_retry_%d", index+1),
@@ -704,6 +692,105 @@ func (p *Plugin) scheduleArchiveRetries(
 			)
 		}
 	}()
+}
+
+func (p *Plugin) scheduleDeleteRetries(
+	userID int64,
+	delays []time.Duration,
+) {
+	p.mu.Lock()
+	runCtx := p.runCtx
+	p.mu.Unlock()
+	if runCtx == nil || len(delays) == 0 {
+		return
+	}
+	go func() {
+		elapsed := time.Duration(0)
+		for index, target := range delays {
+			wait := target - elapsed
+			if wait < 0 {
+				wait = 0
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-runCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			elapsed = target
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				15*time.Second,
+			)
+			err := p.deletePrivateHistory(ctx, userID)
+			cancel()
+			p.logActionResult(
+				fmt.Sprintf("delete_retry_%d", index+1),
+				userID,
+				err,
+			)
+		}
+	}()
+}
+
+func (p *Plugin) setPrivateChatQuarantined(
+	ctx context.Context,
+	userID int64,
+	enabled bool,
+) error {
+	if err := p.services.Telegram.SetPrivateChatQuarantined(
+		ctx,
+		userID,
+		enabled,
+	); err != nil {
+		return err
+	}
+	settings, err := p.services.Telegram.GetPrivateChatSettings(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("verify private chat folder: %w", err)
+	}
+	if !settings.FolderKnown {
+		return errors.New("verify private chat folder: host did not return folder state")
+	}
+	if !settings.DialogExists {
+		if enabled {
+			return errors.New("verify private chat folder: dialog does not exist")
+		}
+		return nil
+	}
+	if settings.Archived != enabled {
+		return fmt.Errorf(
+			"verify private chat folder: folder_id=%d, archived=%t, want archived=%t",
+			settings.FolderID,
+			settings.Archived,
+			enabled,
+		)
+	}
+	return nil
+}
+
+func (p *Plugin) deletePrivateHistory(
+	ctx context.Context,
+	userID int64,
+) error {
+	if err := p.services.Telegram.DeletePrivateHistory(ctx, userID); err != nil {
+		return err
+	}
+	settings, err := p.services.Telegram.GetPrivateChatSettings(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("verify deleted private history: %w", err)
+	}
+	if !settings.FolderKnown {
+		return errors.New("verify deleted private history: host did not return dialog state")
+	}
+	if settings.DialogExists {
+		return fmt.Errorf(
+			"verify deleted private history: dialog still exists in folder %d",
+			settings.FolderID,
+		)
+	}
+	return nil
 }
 
 func (p *Plugin) punishDirect(

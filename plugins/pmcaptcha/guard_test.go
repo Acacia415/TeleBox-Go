@@ -53,12 +53,14 @@ type testTelegram struct {
 	mu                sync.Mutex
 	nextID            int
 	quarantined       map[int64]bool
+	dialogExists      map[int64]bool
 	blocked           map[int64]bool
 	deleted           [][]int
 	reported          []int64
 	operations        []string
 	unarchiveOnSend   bool
 	unarchiveOnDelete bool
+	ignoreQuarantine  bool
 }
 
 func (c *testTelegram) SendText(
@@ -70,6 +72,7 @@ func (c *testTelegram) SendText(
 	defer c.mu.Unlock()
 	c.nextID++
 	c.operations = append(c.operations, "send_text")
+	c.dialogExists[chatID] = true
 	if c.unarchiveOnSend {
 		c.quarantined[chatID] = false
 	}
@@ -98,12 +101,34 @@ func (c *testTelegram) SetPrivateChatQuarantined(
 ) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.quarantined[userID] = enabled
 	c.operations = append(
 		c.operations,
 		fmt.Sprintf("quarantine:%t", enabled),
 	)
+	if c.ignoreQuarantine {
+		return nil
+	}
+	c.quarantined[userID] = enabled
 	return nil
+}
+
+func (c *testTelegram) GetPrivateChatSettings(
+	_ context.Context,
+	userID int64,
+) (telegram.PrivateChatSettings, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	exists, known := c.dialogExists[userID]
+	if !known {
+		exists = true
+	}
+	return telegram.PrivateChatSettings{
+		CanReportSpam: true,
+		FolderKnown:   true,
+		DialogExists:  exists,
+		FolderID:      map[bool]int{false: 0, true: 1}[c.quarantined[userID]],
+		Archived:      exists && c.quarantined[userID],
+	}, nil
 }
 
 func (c *testTelegram) BlockUser(_ context.Context, userID int64) error {
@@ -128,16 +153,23 @@ func (c *testTelegram) ReportSpam(_ context.Context, userID int64) error {
 	c.operations = append(c.operations, "report")
 	return nil
 }
-
-func (c *testTelegram) DeletePrivateHistory(context.Context, int64) error {
+func (c *testTelegram) DeletePrivateHistory(
+	_ context.Context,
+	userID int64,
+) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dialogExists[userID] = false
+	c.operations = append(c.operations, "delete_history")
 	return nil
 }
 
 func newGuardTestPlugin(t *testing.T) (*Plugin, *testTelegram) {
 	t.Helper()
 	client := &testTelegram{
-		quarantined: make(map[int64]bool),
-		blocked:     make(map[int64]bool),
+		quarantined:  make(map[int64]bool),
+		dialogExists: make(map[int64]bool),
+		blocked:      make(map[int64]bool),
 	}
 	store := &testStorage{values: make(map[string][]byte)}
 	p := New(service.Container{
@@ -149,6 +181,50 @@ func newGuardTestPlugin(t *testing.T) (*Plugin, *testTelegram) {
 	p.runCtx, p.cancel = context.WithCancel(context.Background())
 	t.Cleanup(p.cancel)
 	return p, client
+}
+
+func TestSetPrivateChatQuarantinedRequiresObservedFolderState(t *testing.T) {
+	t.Parallel()
+	p, client := newGuardTestPlugin(t)
+	const userID = int64(47)
+	client.ignoreQuarantine = true
+
+	err := p.setPrivateChatQuarantined(
+		context.Background(),
+		userID,
+		true,
+	)
+	if err == nil || !strings.Contains(err.Error(), "folder_id=0") {
+		t.Fatalf("setPrivateChatQuarantined() error = %v", err)
+	}
+}
+
+func TestPunishDeleteBlocksAndRemovesDialog(t *testing.T) {
+	t.Parallel()
+	p, client := newGuardTestPlugin(t)
+	const userID = int64(48)
+
+	if err := p.punish(
+		context.Background(),
+		userID,
+		Config{Action: "delete", Report: true, Silent: true},
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if !client.blocked[userID] {
+		t.Fatal("action=delete did not block the user")
+	}
+	if client.dialogExists[userID] {
+		t.Fatal("action=delete did not remove the private dialog")
+	}
+	want := []string{"report", "block", "delete_history"}
+	if fmt.Sprint(client.operations) != fmt.Sprint(want) {
+		t.Fatalf("operations = %v, want %v", client.operations, want)
+	}
 }
 
 func TestPunishBanRestoresArchiveAfterFailureNotice(t *testing.T) {
