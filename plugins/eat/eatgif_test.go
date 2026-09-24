@@ -7,6 +7,13 @@ import (
 	"time"
 )
 
+func TestEatGIFUsesOfficialTemplateSource(t *testing.T) {
+	const want = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/refs/heads/main/eatgif/"
+	if eatGIFBaseURL != want {
+		t.Fatalf("eatGIFBaseURL = %q, want %q", eatGIFBaseURL, want)
+	}
+}
+
 func TestSafeRelativePath(t *testing.T) {
 	got, err := safeRelativePath("dr/dr1.png")
 	if err != nil {
