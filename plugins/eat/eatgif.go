@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	eatGIFBaseURL    = "https://raw.githubusercontent.com/ClearLuv/TeleBox_Plugins/refs/heads/beta/eatgif/"
+	eatGIFBaseURL    = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/refs/heads/main/eatgif/"
 	eatGIFTargetSize = 250 << 10
 )
 
@@ -77,7 +77,7 @@ func NewGIF(services service.Container) *GIFPlugin {
 func (p *GIFPlugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eatgif",
-		Version:     "0.3.2",
+		Version:     "0.3.3",
 		Description: "将双方头像逐帧合成到动态表情模板",
 	}
 }
