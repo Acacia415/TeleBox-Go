@@ -77,7 +77,7 @@ func NewGIF(services service.Container) *GIFPlugin {
 func (p *GIFPlugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eatgif",
-		Version:     "0.3.3",
+		Version:     "0.3.4",
 		Description: "将双方头像逐帧合成到动态表情模板",
 	}
 }
@@ -245,6 +245,10 @@ func (p *GIFPlugin) generate(
 		return p.respond(ctx, request, "❌ 获取当前账号头像失败："+err.Error())
 	}
 
+	// Temporary directories may be cleaned up while the plugin is running.
+	if err := os.MkdirAll(p.workDir, 0o700); err != nil {
+		return p.respond(ctx, request, "❌ 创建逐帧目录失败："+err.Error())
+	}
 	jobDir, err := os.MkdirTemp(p.workDir, "job-*")
 	if err != nil {
 		return p.respond(ctx, request, "❌ 创建逐帧目录失败："+err.Error())
