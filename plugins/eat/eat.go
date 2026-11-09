@@ -106,7 +106,7 @@ func New(services service.Container) *Plugin {
 func (p *Plugin) Metadata() plugin.Metadata {
 	return plugin.Metadata{
 		Name:        "eat",
-		Version:     "0.3.8",
+		Version:     "0.3.9",
 		Description: "使用头像或回复图片制作静态表情",
 	}
 }
@@ -175,36 +175,41 @@ func (p *Plugin) handle(
 		clear(p.assetCache)
 		return p.respond(ctx, request, "✅ 表情配置和临时缓存已清理")
 	}
-	if err := p.ensureConfig(ctx); err != nil {
-		return p.respond(ctx, request, "❌ 加载表情配置失败："+err.Error())
-	}
-	if useMedia && len(request.Args) > 0 && strings.EqualFold(request.Args[0], "debug") {
+	diagnostic := useMedia && len(request.Args) > 0 && strings.EqualFold(request.Args[0], "debug")
+	key := ""
+	if diagnostic {
 		if request.Message.ReplyToID == 0 || len(request.Args) < 2 {
 			return p.respond(ctx, request,
 				"❌ 请回复图片或贴纸后使用 "+request.Prefix+"eat2 debug <模板名>")
 		}
-		key := strings.ToLower(strings.TrimSpace(request.Args[1]))
-		selected, ok := p.cfg.Entries[key]
-		if !ok {
-			return p.respond(ctx, request, "❌ 找不到表情 "+key)
-		}
-		return p.diagnose(ctx, request, key, selected)
-	}
-	if request.Message.ReplyToID == 0 {
-		return p.respond(ctx, request, p.listText(request.Prefix))
-	}
-	key := ""
-	if len(request.Args) > 0 {
+		key = strings.ToLower(strings.TrimSpace(request.Args[1]))
+	} else if len(request.Args) > 0 {
 		key = strings.ToLower(strings.TrimSpace(request.Args[0]))
 	}
-	if key == "" {
-		keys := sortedKeys(p.cfg.Entries)
-		key = keys[rand.IntN(len(keys))]
+	// Bundled templates can render immediately, even without a remote config.
+	selected, ok := builtinEntries()[key]
+	if !ok || request.Message.ReplyToID == 0 {
+		if err := p.ensureConfig(ctx); err != nil {
+			return p.respond(ctx, request, "❌ 加载表情配置失败："+err.Error())
+		}
+		if request.Message.ReplyToID == 0 {
+			return p.respond(ctx, request, p.listText(request.Prefix))
+		}
+		if key == "" {
+			keys := sortedKeys(p.cfg.Entries)
+			key = keys[rand.IntN(len(keys))]
+		}
+		selected, ok = p.cfg.Entries[key]
 	}
-	selected, ok := p.cfg.Entries[key]
 	if !ok {
+		if diagnostic {
+			return p.respond(ctx, request, "❌ 找不到表情 "+key)
+		}
 		return p.respond(ctx, request,
 			"❌ 找不到表情 "+key+"\n\n"+p.listText(request.Prefix))
+	}
+	if diagnostic {
+		return p.diagnose(ctx, request, key, selected)
 	}
 	return p.generate(ctx, request, selected, useMedia)
 }
@@ -263,7 +268,7 @@ func (p *Plugin) diagnose(
 
 	files := make(map[string][]byte)
 	var report strings.Builder
-	fmt.Fprintf(&report, "eat plugin: 0.3.8\n")
+	fmt.Fprintf(&report, "eat plugin: %s\n", p.Metadata().Version)
 	fmt.Fprintf(&report, "template: %s (%s)\n", key, selected.Name)
 	fmt.Fprintf(&report, "message media: kind=%s mime=%s size=%d declared=%dx%d\n",
 		replied.Media.Kind,
@@ -549,6 +554,9 @@ func (p *Plugin) loadConfig(ctx context.Context, configURL string) (loadedConfig
 	base, err := resourceBase(configURL)
 	if err != nil {
 		return loadedConfig{}, err
+	}
+	for key, item := range builtinEntries() {
+		document.Resources[key] = item
 	}
 	return loadedConfig{
 		URL:       configURL,
@@ -941,6 +949,9 @@ func (p *Plugin) applyRole(
 }
 
 func (p *Plugin) asset(ctx context.Context, value string) ([]byte, error) {
+	if strings.HasPrefix(value, "builtin/") {
+		return builtinAssets.ReadFile(value)
+	}
 	if local := p.localAsset(value); local != "" {
 		if data, err := os.ReadFile(local); err == nil {
 			return data, nil
@@ -1430,6 +1441,7 @@ const eatGuideHTML = `<b>静态表情</b>
 <b>使用头像</b>
 <code>{{prefix}}eat</code>  查看模板列表
 回复用户消息后发送 <code>{{prefix}}eat &lt;模板名&gt;</code>
+<code>{{prefix}}eat kj</code>  看剑：左侧使用自己的头像，右侧使用被回复者头像
 模板名留空时随机选择
 
 <b>使用图片</b>
