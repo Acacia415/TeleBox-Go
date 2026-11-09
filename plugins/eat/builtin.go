@@ -17,7 +17,7 @@ func builtinEntries() map[string]entry {
 				Mask: "builtin/maskkj-me.png",
 			},
 			You: &role{
-				X: 442, Y: 265,
+				X: 415, Y: 246,
 				Mask: "builtin/maskkj-you.png",
 			},
 		},

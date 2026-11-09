@@ -142,6 +142,8 @@ func TestBuiltinKJGeneratesWithoutRemoteConfig(t *testing.T) {
 			for point, want := range map[image.Point]color.NRGBA{
 				{X: 126, Y: 235}: self,
 				{X: 462, Y: 290}: target,
+				{X: 433, Y: 280}: target,
+				{X: 450, Y: 275}: target,
 			} {
 				if got := color.NRGBAModel.Convert(result.At(point.X, point.Y)); got != want {
 					t.Fatalf("pixel %v = %v, want %v", point, got, want)
@@ -155,7 +157,7 @@ func TestBuiltinKJGeneratesWithoutRemoteConfig(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, point := range []image.Point{{X: 120, Y: 285}, {X: 450, Y: 275}, {X: 420, Y: 230}} {
+			for _, point := range []image.Point{{X: 120, Y: 285}, {X: 474, Y: 318}, {X: 420, Y: 230}} {
 				got := color.NRGBAModel.Convert(result.At(point.X, point.Y))
 				want := color.NRGBAModel.Convert(original.At(point.X, point.Y))
 				if got != want {
